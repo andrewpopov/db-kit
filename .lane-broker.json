@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "undeclaredLanes": { "as": "default" },
+  "lanes": {
+    "default": {
+      "weight": 1,
+      "cpuCores": 2,
+      "memoryBytes": 2147483648,
+      "remote": true,
+      "remoteDeps": ["."]
+    },
+    "prepush": { "weight": 1, "cpuCores": 2, "memoryBytes": 2147483648, "remote": true, "remoteDeps": ["."] }
+  }
+}
