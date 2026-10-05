@@ -1,5 +1,5 @@
 import { createServer, type AddressInfo, type Socket } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DbKitError } from './errors.js';
 import { openDatabase } from './open.js';
 import { openPostgres, type PostgresHandle } from './postgres.js';
@@ -7,6 +7,8 @@ import { startThrowawayPostgres, type ThrowawayPostgres } from './test-support/e
 import type { PostgresConfig } from './url.js';
 
 let server: ThrowawayPostgres;
+// Certificate with IP SANs only (no DNS name): the configured host, not 'localhost', must be what is verified.
+let ipServer: ThrowawayPostgres;
 const handles: PostgresHandle[] = [];
 
 function open(opts: Partial<Parameters<typeof openPostgres>[1]> = {}, config: Partial<PostgresConfig> = {}): PostgresHandle {
@@ -16,13 +18,13 @@ function open(opts: Partial<Parameters<typeof openPostgres>[1]> = {}, config: Pa
 }
 
 beforeAll(async () => {
-  server = await startThrowawayPostgres();
+  [server, ipServer] = await Promise.all([startThrowawayPostgres(), startThrowawayPostgres('IP:127.0.0.1,IP:::1')]);
   console.log(`embedded-postgres started in ${server.startupMs} ms on port ${server.config.port}`);
 }, 180_000);
 
 afterAll(async () => {
   await Promise.allSettled(handles.map((h) => h.close()));
-  await server?.stop();
+  await Promise.allSettled([server?.stop(), ipServer?.stop()]);
 });
 
 describe('openPostgres', () => {
@@ -173,5 +175,104 @@ describe('openPostgres', () => {
     const mismatch = await open(tls, { sslmode: 'verify-full', host: '127.0.0.1' }).health();
     expect(mismatch.ok).toBe(false);
     expect(mismatch.error).toMatch(/altnames|hostname|IP/i);
+  });
+
+  describe('verify-full identity is the configured host', () => {
+    const ipConfig = (host: string): Partial<PostgresConfig> => ({ ...ipServer.config, host, sslmode: 'verify-full' });
+    const openIp = (host: string): PostgresHandle =>
+      open({ connectionTimeoutMs: 3000, tlsCa: ipServer.caPem }, ipConfig(host));
+
+    it('IP literal in the certificate SAN passes', async () => {
+      expect((await openIp('127.0.0.1').health()).ok).toBe(true);
+    });
+
+    it('a cert with no DNS SAN is refused for host "localhost" (identity is not hard-wired to localhost)', async () => {
+      const result = await openIp('localhost').health();
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/altnames|hostname|does not match/i);
+    });
+
+    it('cert for localhost only is refused for 127.0.0.1', async () => {
+      const result = await open({ connectionTimeoutMs: 3000, tlsCa: server.caPem }, { sslmode: 'verify-full', host: '127.0.0.1' }).health();
+      expect(result.ok).toBe(false);
+    });
+
+    it('IPv6 literal in the SAN passes when the server listens on ::1', async () => {
+      const result = await openIp('::1').health();
+      expect(result.ok, result.error).toBe(true);
+    });
+  });
+
+  it('statementTimeoutMs: 0 really disables, overriding a role-level default, on every pooled connection', async () => {
+    const admin = open();
+    await admin.pool.query("create role t3 login password 'pw3'");
+    await admin.pool.query("alter role t3 set statement_timeout = '7s'");
+    const asRole = (statementTimeoutMs: number): PostgresHandle => open({ statementTimeoutMs, poolSize: 3 }, { user: 't3', password: 'pw3' });
+
+    const baseline = await asRole(30_000).pool.query<{ statement_timeout: string }>('show statement_timeout');
+    expect(baseline.rows[0]?.statement_timeout).toBe('30s');
+
+    const disabled = asRole(0);
+    // Hold three connections at once so the pool really opens three distinct ones.
+    const clients = await Promise.all([disabled.pool.connect(), disabled.pool.connect(), disabled.pool.connect()]);
+    try {
+      for (const client of clients) {
+        const { rows } = await client.query<{ statement_timeout: string }>('show statement_timeout');
+        expect(rows[0]?.statement_timeout).toBe('0');
+      }
+    } finally {
+      for (const client of clients) client.release();
+    }
+  });
+
+  it('timed-out health probes do not occupy the pool or hang close()', async () => {
+    const sockets: Socket[] = [];
+    const silent = createServer((socket) => {
+      socket.resume(); // consume, so a client-side close is observed
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    const { port } = silent.address() as AddressInfo;
+    try {
+      const handle = open({ healthTimeoutMs: 150, poolSize: 1, connectionTimeoutMs: 10_000 }, { host: '127.0.0.1', port });
+      for (let i = 0; i < 4; i++) expect((await handle.health()).ok).toBe(false);
+      // Probes must not have taken the pool's only slot: nothing is checked out or waiting.
+      expect(handle.pool.totalCount).toBe(0);
+      expect(handle.pool.waitingCount).toBe(0);
+      // Every probe's socket must have been torn down by the client, not left for the server to close.
+      await vi.waitFor(() => expect(sockets.filter((socket) => !socket.destroyed && socket.readable)).toHaveLength(0), { timeout: 1000 });
+      expect(sockets).toHaveLength(4);
+      // close() must finish on its own, while the silent server's sockets are still open.
+      const closed = await Promise.race([handle.close().then(() => 'closed'), new Promise((r) => setTimeout(() => r('hung'), 2000))]);
+      expect(closed).toBe('closed');
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
+  });
+
+  it('a probe that connects but whose query hangs is destroyed, not left open', async () => {
+    const sockets: Socket[] = [];
+    // Speaks just enough protocol to finish startup (AuthenticationOk + ReadyForQuery), then ignores every query.
+    const stalled = createServer((socket) => {
+      sockets.push(socket);
+      let answered = false;
+      socket.on('data', () => {
+        if (answered) return;
+        answered = true;
+        socket.write(Buffer.from([0x52, 0, 0, 0, 8, 0, 0, 0, 0, 0x5a, 0, 0, 0, 5, 0x49]));
+      });
+    });
+    await new Promise<void>((resolve) => stalled.listen(0, '127.0.0.1', resolve));
+    const { port } = stalled.address() as AddressInfo;
+    try {
+      const result = await open({ healthTimeoutMs: 200 }, { host: '127.0.0.1', port }).health();
+      expect(result.ok).toBe(false);
+      expect(sockets).toHaveLength(1);
+      await vi.waitFor(() => expect(sockets[0]?.destroyed).toBe(true), { timeout: 1000 });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => stalled.close(() => resolve()));
+    }
   });
 });

@@ -9,7 +9,7 @@ import type { PostgresConfig } from '../url.js';
 export interface ThrowawayPostgres {
   /** Config for the superuser `postgres` with the real password. */
   config: PostgresConfig;
-  /** PEM of the self-signed server certificate (SAN: DNS:localhost only, not 127.0.0.1). */
+  /** PEM of the self-signed server certificate (SAN per `san`). */
   caPem: string;
   startupMs: number;
   stop(): Promise<void>;
@@ -28,7 +28,8 @@ function freePort(): Promise<number> {
 }
 
 /** Start a real Postgres in a temp dir on a random free port with password auth. Torn down by `stop()`. */
-export async function startThrowawayPostgres(): Promise<ThrowawayPostgres> {
+/** `san` is the certificate's subjectAltName (default only `DNS:localhost`, so 127.0.0.1 does not match). */
+export async function startThrowawayPostgres(san = 'DNS:localhost'): Promise<ThrowawayPostgres> {
   const started = performance.now();
   const dir = mkdtempSync(join(tmpdir(), 'db-kit-pg-'));
   const port = await freePort();
@@ -37,7 +38,7 @@ export async function startThrowawayPostgres(): Promise<ThrowawayPostgres> {
   const key = join(dir, 'server.key');
   execFileSync(
     'openssl',
-    ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost', '-keyout', key, '-out', cert],
+    ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=db-kit-test', '-addext', `subjectAltName=${san}`, '-keyout', key, '-out', cert],
     { stdio: 'ignore' },
   );
   const server = new EmbeddedPostgres({

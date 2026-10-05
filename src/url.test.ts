@@ -81,6 +81,14 @@ suite('parseDatabaseUrl: postgres', () => {
   });
 });
 
+suite('parseDatabaseUrl: query keys are never echoed', () => {
+  it('a key equal to the password is not in the message', () => {
+    const error = errorOf(() => parseDatabaseUrl('postgres://u:hunter2@h/db?hunter2=1'));
+    expect(String(error)).not.toContain('hunter2');
+    expect((error as Error).message).toContain('unsupported query parameter');
+  });
+});
+
 suite('parseDatabaseUrl: other input', () => {
   it.each(['', '   ', 'not a url', 'mysql://u:p@h/db', 'http://u:p@h/db'])('rejects %j', (url) => {
     expect(errorOf(() => parseDatabaseUrl(url))).toBeInstanceOf(DbKitError);
@@ -126,8 +134,28 @@ suite('describe', () => {
     expect(describe(parseDatabaseUrl('file:./app.db'))).toBe('sqlite:./app.db');
   });
 
-  it('redacts a raw string that does not parse (userinfo and password= param)', () => {
-    expect(describe('mysql://u:hunter2@h/db?password=hunter2&x=1')).toBe('mysql://u:***@h/db?password=***&x=1');
-    expect(describe('postgres://u:hunter2@h/db?sslmode=bogus&password=hunter2')).not.toContain('hunter2');
+  it('redacts everything before the last @ of a raw string that does not parse, and keeps only the host', () => {
+    expect(describe('mysql://u:hunter2@h/db?password=hunter2&x=1')).toBe('mysql://***@h');
+    expect(describe('mysql://u:hunter2@h')).toBe('mysql://***@h');
+    expect(describe('mysql://h/db?x=1#frag')).toBe('mysql://h');
+  });
+
+  it.each([
+    ['percent-encoded param name', 'postgres://u@h/db?sslmode=bogus&%70assword=hunter2'],
+    ['literal @ in the password', 'mysql://u:hunter2@second@host/db'],
+    ['literal @ twice, first segment', 'mysql://u:hunter2@hunter3@host/db'],
+    ['whitespace in the password', 'postgres://u:hunter2 hunter3@h/db?sslmode=bogus'],
+    ['literal / in the password', 'mysql://u:hunter2/hunter3@h/db'],
+    ['literal # and ? in the password', 'mysql://u:hun#ter?2@h/db'],
+    ['password in query only', 'mysql://h/db?pass%77ord=hunter2'],
+    ['uppercase param', 'mysql://h/db?PASSWORD=hunter2'],
+    ['semicolon-separated param', 'mysql://h/db;password=hunter2'],
+  ])('fallback never leaks: %s', (_name, url) => {
+    const text = describe(url);
+    for (const needle of ['hunter', 'hun#', 'ter?2', 'second']) expect(text).not.toContain(needle);
+  });
+
+  it('gives a fixed placeholder when the string has no scheme', () => {
+    expect(describe('hunter2')).toBe('<unparseable DATABASE_URL>');
   });
 });

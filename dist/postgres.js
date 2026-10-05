@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { DbKitError, scrubError } from './errors.js';
 import { describe } from './url.js';
 export const DEFAULT_STATEMENT_TIMEOUT_MS = 30_000;
@@ -46,7 +46,9 @@ export function openPostgres(config, opts) {
     if (!Number.isInteger(poolSize) || poolSize < 1)
         throw new DbKitError('INVALID_OPTIONS', 'poolSize must be a positive integer');
     const scrub = (error) => scrubError(error, [config.password]);
-    const pool = new Pool({
+    // `statement_timeout` as a startup `options` flag rather than pg's `statement_timeout` field: pg
+    // omits a falsy value, so 0 would silently inherit a role/database default instead of disabling.
+    const connection = {
         host: config.host,
         port: config.port,
         database: config.database,
@@ -54,7 +56,10 @@ export function openPostgres(config, opts) {
         password: config.password,
         ssl: tlsFor(config.sslmode, opts.tlsCa),
         application_name: opts.applicationName,
-        statement_timeout: statementTimeoutMs,
+        options: `-c statement_timeout=${statementTimeoutMs}`,
+    };
+    const pool = new Pool({
+        ...connection,
         max: poolSize,
         idleTimeoutMillis: idleTimeoutMs,
         connectionTimeoutMillis: connectionTimeoutMs,
@@ -68,22 +73,29 @@ export function openPostgres(config, opts) {
         async health() {
             const started = performance.now();
             const elapsed = () => performance.now() - started;
-            let timer;
-            const query = pool.query('select 1');
-            // If the timeout wins the race the query may still settle later (and release its connection); a late rejection must not go unhandled.
-            query.catch(() => undefined);
-            const timeout = new Promise((_, reject) => {
-                timer = setTimeout(() => reject(new Error(`health check timed out after ${healthTimeoutMs}ms`)), healthTimeoutMs);
-            });
+            if (closing)
+                return { ok: false, latencyMs: elapsed(), error: 'handle is closed' };
+            // A throwaway client, not a pool checkout: a hung probe is destroyed outright, so it can
+            // never hold a pool slot or delay close().
+            const client = new Client({ ...connection, connectionTimeoutMillis: healthTimeoutMs, query_timeout: healthTimeoutMs });
+            client.on('error', () => undefined);
+            let timedOut = false;
+            const timer = setTimeout(() => {
+                timedOut = true;
+                client.connection.stream.destroy();
+            }, healthTimeoutMs);
             try {
-                await Promise.race([query, timeout]);
+                await client.connect();
+                await client.query('select 1');
                 return { ok: true, latencyMs: elapsed() };
             }
             catch (error) {
-                return { ok: false, latencyMs: elapsed(), error: `${describe(config)}: ${scrub(error).message}` };
+                const reason = timedOut ? `health check timed out after ${healthTimeoutMs}ms` : scrub(error).message;
+                return { ok: false, latencyMs: elapsed(), error: `${describe(config)}: ${reason}` };
             }
             finally {
                 clearTimeout(timer);
+                client.connection.stream.destroy();
             }
         },
         close() {

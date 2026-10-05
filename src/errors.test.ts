@@ -16,4 +16,21 @@ describe('scrubError', () => {
   it('wraps non-Error throwables', () => {
     expect(scrubError('boom hunter2', ['hunter2']).message).toBe('boom ***');
   });
+
+  it('scrubs name, stack and every own string property, not just message and code', () => {
+    const original = Object.assign(new Error('boom'), {
+      name: 'Err-hunter2',
+      detail: 'Key (pw)=(hunter2) is bad',
+      hint: 'try hunter2',
+      count: 3,
+    });
+    original.stack = 'Err-hunter2: boom\n    at connect (hunter2.js:1:1)';
+    const scrubbed = scrubError(original, ['hunter2']) as Error & Record<string, unknown>;
+    expect(scrubbed.name).toBe('Err-***');
+    expect(scrubbed.stack).not.toContain('hunter2');
+    expect(scrubbed.detail).toBe('Key (pw)=(***) is bad');
+    expect(scrubbed.hint).toBe('try ***');
+    expect(scrubbed.count).toBeUndefined();
+    expect(JSON.stringify(scrubbed, Object.getOwnPropertyNames(scrubbed))).not.toContain('hunter2');
+  });
 });

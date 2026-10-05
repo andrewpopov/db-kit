@@ -25,7 +25,7 @@ await handle.close(); // idempotent
 | Export | What |
 |---|---|
 | `parseDatabaseUrl(url)` | URL -> zod-validated `DatabaseConfig` (`dialect: 'sqlite' \| 'postgres'`). Throws `DbKitError('INVALID_DATABASE_URL')`. |
-| `describe(config)` | Log-safe string. Also accepts a raw URL string (regex-redacted if it does not parse). |
+| `describe(config)` | Log-safe string. Also accepts a raw URL string; one that does not parse is reduced to `scheme://[***@]host`. |
 | `openSqlite(config, opts)` | `{ dialect, db, health(), close() }`, `db` is a `better-sqlite3` `Database`. |
 | `openPostgres(config, opts)` | `{ dialect, pool, health(), close() }`, `pool` is a `pg.Pool`. |
 | `openDatabase(url, { sqlite?, postgres? })` | Parse, then dispatch on the scheme. |
@@ -53,7 +53,7 @@ Any other scheme is rejected.
 
 SQLite (each applied and **read back**; a mismatch throws `SQLITE_PRAGMA_UNVERIFIED`): `journal_mode=WAL` (in-memory databases are exempt; `readonly: true` does not request it), `busy_timeout=5000` (`busyTimeoutMs`), `foreign_keys=ON`, `synchronous=NORMAL`.
 
-Postgres (`PostgresOptions`): `applicationName` (**required**, appears in `pg_stat_activity`), `statementTimeoutMs=30000` (server-side, per connection; 0 disables), `poolSize=10`, `idleTimeoutMs=30000`, `connectionTimeoutMs=10000`, `healthTimeoutMs=5000` (bounds the whole `select 1`), `tlsCa` (PEM, for a private CA), `onPoolError`.
+Postgres (`PostgresOptions`): `applicationName` (**required**, appears in `pg_stat_activity`), `statementTimeoutMs=30000` (server-side, per connection, sent as a startup option; 0 disables and overrides any role/database default), `poolSize=10`, `idleTimeoutMs=30000`, `connectionTimeoutMs=10000`, `healthTimeoutMs=5000` (bounds the whole `select 1`; `health()` uses its own short-lived connection, destroyed on timeout, so a stuck probe never holds a pool slot), `tlsCa` (PEM, for a private CA), `onPoolError`.
 
 ### sslmode (default `disable`)
 

@@ -34,11 +34,6 @@ function invalid(message: string): never {
   throw new DbKitError('INVALID_DATABASE_URL', `Invalid DATABASE_URL: ${message}`);
 }
 
-/** Only echo a query key when it is plainly an identifier; anything else could be data. */
-function describeKey(key: string): string {
-  return /^[A-Za-z0-9_]{1,40}$/.test(key) ? `"${key}"` : '(unprintable key)';
-}
-
 function decode(part: string, what: string): string {
   try {
     return decodeURIComponent(part);
@@ -72,8 +67,8 @@ function parsePostgres(url: string): PostgresConfig {
 
   const query = new Map<string, string>();
   for (const [key, value] of parsed.searchParams) {
-    if (!POSTGRES_QUERY_KEYS.includes(key)) invalid(`unsupported query parameter ${describeKey(key)}`);
-    if (query.has(key)) invalid(`duplicate query parameter ${describeKey(key)}`);
+    if (!POSTGRES_QUERY_KEYS.includes(key)) invalid('unsupported query parameter (allowed: sslmode, user, password)');
+    if (query.has(key)) invalid('duplicate query parameter');
     query.set(key, value);
   }
 
@@ -136,11 +131,20 @@ function describePostgres(config: PostgresConfig): string {
   return `postgres://${auth}${host}:${config.port}/${encodeURIComponent(config.database)}?sslmode=${config.sslmode}`;
 }
 
-/** Last-resort scrubbing for a raw URL string that did not parse. */
+/**
+ * Fallback for a string that does not parse. It cannot pattern-match its way
+ * to safety (percent-encoded names, literal `@`/`/`/`#` in a password), so it
+ * keeps only what is provably not a secret: the scheme and the host. Everything
+ * up to the LAST `@` is treated as userinfo, and the path and query are dropped.
+ */
 function redactRawUrl(url: string): string {
-  return url
-    .replace(/(:\/\/[^:/?#@\s]*:)[^@\s]*@/g, '$1***@')
-    .replace(/([?&;]password=)[^&#\s]*/gi, '$1***');
+  const schemeEnd = url.indexOf('://');
+  if (schemeEnd < 1 || !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(url.slice(0, schemeEnd))) return '<unparseable DATABASE_URL>';
+  const scheme = url.slice(0, schemeEnd);
+  const afterScheme = url.slice(schemeEnd + 3);
+  const lastAt = afterScheme.lastIndexOf('@');
+  const hostPart = afterScheme.slice(lastAt + 1).split(/[/?#;\s]/, 1)[0];
+  return `${scheme}://${lastAt >= 0 ? '***@' : ''}${hostPart}`;
 }
 
 /**
