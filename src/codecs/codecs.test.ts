@@ -162,7 +162,6 @@ describe('json-text canonical form is lossless', () => {
     expect(canon('"a"')).not.toBe(canon('"b"'));
     expect(canon('"1"')).not.toBe(canon('1'));
     expect(canon('{"b":1,"a":{"d":[],"c":{}}}')).toBe(canon('{"a":{"c":{},"d":[]},"b":1}'));
-    expect(canon('{"a":1,"a":2}')).toBe(canon('{"a":2}'));
     expect(canon('[true,false,null]')).toBe('[true,false,null]');
   });
 

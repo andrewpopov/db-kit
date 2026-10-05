@@ -98,6 +98,8 @@ function parseJson(text) {
 }
 const NUMBER = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 const LITERAL = /[a-z]+/y;
+/** Nesting deeper than this is refused when JSON is parsed, so walking it can never overflow the stack. */
+export const MAX_JSON_DEPTH = 512;
 const MAX_EXPANDED_DIGITS = 100_000;
 /** Exact decimal form of a JSON number token: exponent expanded, leading zeros and trailing fractional zeros dropped, -0 is 0. */
 function canonicalJsonNumber(token) {
@@ -118,10 +120,11 @@ function canonicalJsonNumber(token) {
 }
 /**
  * Re-emit valid JSON text by walking its tokens, never through `JSON.parse` values, so a number keeps every digit.
- * `canonical` also sorts keys (last duplicate wins, as in jsonb) and normalises numbers; without it only whitespace
+ * `canonical` also sorts keys and normalises numbers; duplicate keys and nesting past `MAX_JSON_DEPTH` are refused; without it only whitespace
  * is dropped. Strings are decoded and re-encoded, so `"\u0041"` and `"A"` are the same.
  */
 function renderJson(text, canonical) {
+    const depthLimit = () => reject('invalid', `JSON is nested deeper than ${MAX_JSON_DEPTH} levels`);
     let at = 0;
     const skip = () => {
         while (text[at] === ' ' || text[at] === '\t' || text[at] === '\n' || text[at] === '\r')
@@ -135,12 +138,15 @@ function renderJson(text, canonical) {
         const decoded = JSON.parse(text.slice(start, at));
         return typeof decoded === 'string' ? decoded : reject('invalid', 'not valid JSON');
     };
-    const value = () => {
+    const value = (depth) => {
         skip();
         const c = text[at];
+        if (depth > MAX_JSON_DEPTH && (c === '{' || c === '['))
+            return depthLimit();
         if (c === '{') {
             at++;
             const members = [];
+            const seen = new Set();
             skip();
             if (text[at] === '}')
                 at++;
@@ -150,13 +156,16 @@ function renderJson(text, canonical) {
                     const key = str();
                     skip();
                     at++;
-                    members.push([key, value()]);
+                    if (seen.has(key))
+                        reject('invalid', 'duplicate JSON object key (no engine keeps both, so no faithful mapping exists)');
+                    seen.add(key);
+                    members.push([key, value(depth + 1)]);
                     skip();
                     if (text[at++] === '}')
                         break;
                 }
             }
-            const kept = canonical ? [...new Map(members)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) : members;
+            const kept = canonical ? [...members].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) : members;
             return `{${kept.map(([key, child]) => `${JSON.stringify(key)}:${child}`).join(',')}}`;
         }
         if (c === '[') {
@@ -167,7 +176,7 @@ function renderJson(text, canonical) {
                 at++;
             else {
                 for (;;) {
-                    items.push(value());
+                    items.push(value(depth + 1));
                     skip();
                     if (text[at++] === ']')
                         break;
@@ -188,12 +197,12 @@ function renderJson(text, canonical) {
         at += literal.length;
         return literal;
     };
-    return value();
+    return value(1);
 }
 // Timestamps. The supported range is years 0001-9999 (well inside timestamptz's), as microseconds since the epoch.
 const MICROS_MIN = -62135596800000n * 1000n;
 const MICROS_MAX = 253402300799999n * 1000n + 999n;
-const ISO = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(Z|z|[+-]\d{2}(?::?\d{2})?)$/;
+const ISO = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(Z|z|[+-]\d{2}(?::?\d{2}(?::?\d{2})?)?)$/;
 function checkRange(micros) {
     if (micros < MICROS_MIN || micros > MICROS_MAX)
         reject('lossy', 'timestamp is outside the supported range (years 0001-9999)');
@@ -220,18 +229,19 @@ function parseTimestamp(value) {
         date.getUTCSeconds() === Number(second);
     if (!real)
         return reject('invalid', 'not a real calendar timestamp');
-    let offsetMinutes = 0;
+    let offsetSeconds = 0;
     if (zone.toUpperCase() !== 'Z') {
-        const digits = zone.slice(1).replace(':', '');
+        const digits = zone.slice(1).replaceAll(':', '');
         const hours = Number(digits.slice(0, 2));
-        const minutes = Number(digits.slice(2) || '0');
-        if (hours > 23 || minutes > 59)
+        const minutes = Number(digits.slice(2, 4) || '0');
+        const seconds = Number(digits.slice(4, 6) || '0');
+        if (hours > 23 || minutes > 59 || seconds > 59)
             return reject('invalid', 'UTC offset out of range');
-        offsetMinutes = (zone.startsWith('-') ? -1 : 1) * (hours * 60 + minutes);
+        offsetSeconds = (zone.startsWith('-') ? -1 : 1) * (hours * 3600 + minutes * 60 + seconds);
     }
     if (/[1-9]/.test(fraction.slice(6)))
         reject('lossy', 'timestamp has sub-microsecond precision');
-    const micros = BigInt(date.getTime()) * 1000n + BigInt(fraction.slice(0, 6).padEnd(6, '0')) - BigInt(offsetMinutes) * 60000000n;
+    const micros = BigInt(date.getTime()) * 1000n + BigInt(fraction.slice(0, 6).padEnd(6, '0')) - BigInt(offsetSeconds) * 1000000n;
     return checkRange(micros);
 }
 function floorDiv(a, b) {
@@ -312,7 +322,7 @@ export const IMPLEMENTATIONS = {
         pgTypes: ['double precision'],
         fromSqlite: toFiniteReal,
         fromPg: toFiniteReal,
-        toSqlite: identity,
+        toSqlite: (value) => (Object.is(value, -0) ? reject('lossy', 'negative zero is stored as 0 by SQLite') : value),
         toPg: identity,
         canonical: (value) => (Object.is(value, -0) ? '-0' : String(value)),
     }),
@@ -363,6 +373,7 @@ function jsonText(preserveText) {
         if (typeof value !== 'string')
             return reject('invalid', 'JSON must be text (read Postgres with POSTGRES_CODEC_TYPES)');
         parseJson(value);
+        renderJson(value, false); // refuses duplicate keys and excessive depth up front
         return value;
     };
     return implement({

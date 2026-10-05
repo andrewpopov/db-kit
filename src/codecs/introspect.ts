@@ -17,12 +17,17 @@ interface SqliteColumnRow {
   hidden: number;
 }
 
-/** User tables only. `table_xinfo` `hidden` is 2 for a VIRTUAL and 3 for a STORED generated column; 1 is a virtual-table internal. */
+/**
+ * User tables only (`sqlite\_%` with an explicit escape: a bare `_` would also hide `sqliteXlost`). `table_xinfo`
+ * `hidden` is 2 for a VIRTUAL and 3 for a STORED generated column; 1 is a virtual-table internal. Statements read
+ * with `safeIntegers(false)` so the caller's `defaultSafeIntegers` cannot turn `hidden` into a bigint.
+ */
 export function introspectSqlite(db: BetterSqlite3.Database): IntrospectedSchema {
   const tables = db
-    .prepare<[], { name: string }>("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name")
+    .prepare<[], { name: string }>("select name from sqlite_master where type = 'table' and name not like 'sqlite\\_%' escape '\\' order by name")
+    .safeIntegers(false)
     .all();
-  const columnsOf = db.prepare<[string], SqliteColumnRow>('select name, type, hidden from pragma_table_xinfo(?)');
+  const columnsOf = db.prepare<[string], SqliteColumnRow>('select name, type, hidden from pragma_table_xinfo(?)').safeIntegers(false);
   return new Map(
     tables.map(({ name }) => [
       name,
@@ -36,26 +41,28 @@ export function introspectSqlite(db: BetterSqlite3.Database): IntrospectedSchema
 
 interface PostgresColumnRow {
   table_name: string;
-  column_name: string;
-  data_type: string;
-  is_generated: string;
+  /** Null for the single row of a zero-column table. */
+  column_name: string | null;
+  data_type: string | null;
+  is_generated: string | null;
 }
 
-/** Base tables of one schema (default `public`). A column is generated when `is_generated = 'ALWAYS'`; identity columns are not. */
+/** Base tables of one schema (default `public`), zero-column tables included. A column is generated when `is_generated = 'ALWAYS'`; identity columns are not. */
 export async function introspectPostgres(pool: Pool, schema = 'public'): Promise<IntrospectedSchema> {
   const { rows } = await pool.query<PostgresColumnRow>(
-    `select c.table_name, c.column_name, c.data_type, c.is_generated
-       from information_schema.columns c
-       join information_schema.tables t on t.table_schema = c.table_schema and t.table_name = c.table_name
-      where c.table_schema = $1 and t.table_type = 'BASE TABLE'
-      order by c.table_name, c.ordinal_position`,
+    `select t.table_name, c.column_name, c.data_type, c.is_generated
+       from information_schema.tables t
+       left join information_schema.columns c on c.table_schema = t.table_schema and c.table_name = t.table_name
+      where t.table_schema = $1 and t.table_type = 'BASE TABLE'
+      order by t.table_name, c.ordinal_position`,
     [schema],
   );
   const tables = new Map<string, IntrospectedColumn[]>();
   for (const row of rows) {
     const columns = tables.get(row.table_name) ?? [];
-    columns.push({ name: row.column_name, type: row.data_type, generated: row.is_generated === 'ALWAYS' });
     tables.set(row.table_name, columns);
+    if (row.column_name === null || row.data_type === null) continue;
+    columns.push({ name: row.column_name, type: row.data_type, generated: row.is_generated === 'ALWAYS' });
   }
   return tables;
 }

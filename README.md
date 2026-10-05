@@ -61,19 +61,19 @@ codec.canonical(1, 'sqlite') === codec.canonical(true, 'postgres'); // 'true' ==
 validateManifest(manifest, { sqlite: introspectSqlite(sqliteDb), postgres: await introspectPostgres(pool) }); // { ok, issues, generated, report }
 ```
 
-Read Postgres with `pool.query({ text, values, types: POSTGRES_CODEC_TYPES })`: timestamptz and json/jsonb must arrive as raw text (the default parsers round to milliseconds and pre-parse JSON). Values are never inferred and never coerced silently.
+Read Postgres with `pool.query({ text, values, types: POSTGRES_CODEC_TYPES })` on a handle opened with `postgres: { applicationName, codecSession: true }`: timestamptz and json/jsonb must arrive as raw text (the default parsers round to milliseconds and pre-parse JSON), and `codecSession` pins `TimeZone=UTC` and `DateStyle=ISO, YMD` so that text is deterministic (the parser also accepts second-resolution offsets such as `+00:09:21`). Values are never inferred and never coerced silently.
 
 | codec | SQLite value | Postgres column | notes |
 |---|---|---|---|
 | `text` | TEXT | `text` | |
 | `integer` | INTEGER | `bigint` (`integer`/`smallint` also accepted) | safe JS integer only; beyond 2^53 is a `CODEC_LOSSY` error |
 | `bigint` | INTEGER as `bigint` | `bigint` | a bigint end to end, never a JS number; outside int64 is lossy |
-| `real` | REAL | `double precision` | NaN and Infinity are refused |
+| `real` | REAL | `double precision` | NaN and Infinity are refused, and `-0` is refused on the way into SQLite (it stores 0) |
 | `decimal-as-string` | TEXT | `numeric` | exact; plain numeric text only (no exponent, NaN, JS number) |
 | `boolean` | exactly `0` or `1` | `boolean` | `2`, `'1'`, `true` are refused |
 | `timestamp-iso` | TEXT ISO-8601 with an explicit offset | `text` by default (`preserveText: true`), or `timestamptz` (`preserveText: false`) | sub-microsecond precision and years outside 0001-9999 are lossy; converting back writes UTC `...Z` text |
 | `timestamp-epoch-s`, `timestamp-epoch-ms` | INTEGER | `bigint` by default (`preserveInteger: true`), or `timestamptz` (`preserveInteger: false`) | converting back refuses sub-second / sub-millisecond values |
-| `json-text` | TEXT JSON | `text` by default (`preserveText: true`), or `jsonb` (`preserveText: false`) | invalid JSON is refused; jsonb reorders keys, so compare via `canonical` |
+| `json-text` | TEXT JSON | `text` by default (`preserveText: true`), or `jsonb` (`preserveText: false`) | invalid JSON, duplicate object keys at any depth (no engine keeps both) and nesting deeper than 512 levels are refused; jsonb reorders keys, so compare via `canonical` |
 | `blob` | Buffer | `bytea` | canonical form is the sha256 hex |
 | `uuid-text` | TEXT | `uuid` | written back lowercase |
 

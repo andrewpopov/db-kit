@@ -9,6 +9,11 @@ export interface PostgresOptions {
     statementTimeoutMs?: number;
     /** Max connections in the pool. Default 10. */
     poolSize?: number;
+    /**
+     * Pin `TimeZone=UTC` and `DateStyle=ISO, YMD` on every connection (startup options). Required when reading with
+     * the codecs' `POSTGRES_CODEC_TYPES`: their timestamp text is whatever the session prints. Default false.
+     */
+    codecSession?: boolean;
     /** Close idle connections after this many ms. Default 30000. */
     idleTimeoutMs?: number;
     /** Fail a connection attempt (and pool checkout) after this many ms. Default 10000. */

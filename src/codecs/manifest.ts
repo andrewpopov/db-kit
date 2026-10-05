@@ -24,14 +24,35 @@ export const ColumnSpecSchema = z.discriminatedUnion('codec', [
   z.strictObject({ codec: z.literal('uuid-text'), ...columnFields }),
 ]);
 
+/**
+ * A record whose keys are copied with `defineProperty`: zod's own `record` assigns `result[key]`, which for the key
+ * `__proto__` rewrites the prototype and silently drops the entry, so the object is read directly instead.
+ */
+function ownRecord<T extends z.ZodType>(value: T) {
+  return z
+    .custom<Record<string, unknown>>((input) => typeof input === 'object' && input !== null && !Array.isArray(input), 'expected an object')
+    .transform((input, ctx): Record<string, z.output<T>> => {
+      const out: Record<string, z.output<T>> = {};
+      for (const key of Object.keys(input)) {
+        const parsed = value.safeParse(input[key]);
+        if (!parsed.success) {
+          for (const issue of parsed.error.issues) ctx.addIssue({ code: 'custom', message: issue.message, path: [key, ...issue.path] });
+          return z.NEVER;
+        }
+        Object.defineProperty(out, key, { value: parsed.data, enumerable: true, writable: true, configurable: true });
+      }
+      return out;
+  });
+}
+
 export const TableSpecSchema = z
   .strictObject({
-    columns: z.record(z.string(), ColumnSpecSchema),
+    columns: ownRecord(ColumnSpecSchema),
     primaryKey: z.array(z.string()).min(1),
   })
   .superRefine((table, ctx) => {
     for (const name of table.primaryKey) {
-      const column = table.columns[name];
+      const column = Object.hasOwn(table.columns, name) ? table.columns[name] : undefined;
       if (!column) ctx.addIssue({ code: 'custom', message: `primaryKey column "${name}" is not declared in columns`, path: ['primaryKey'] });
       else if (column.nullable) ctx.addIssue({ code: 'custom', message: `primaryKey column "${name}" must not be nullable`, path: ['primaryKey'] });
     }
@@ -39,14 +60,17 @@ export const TableSpecSchema = z
 
 export const CodecManifestSchema = z.strictObject({
   version: z.literal(1),
-  tables: z.record(z.string(), TableSpecSchema),
+  tables: ownRecord(TableSpecSchema),
 });
 
 export type ColumnSpec = z.output<typeof ColumnSpecSchema>;
 export type TableSpec = z.output<typeof TableSpecSchema>;
 export type CodecManifest = z.output<typeof CodecManifestSchema>;
 /** What an app writes: option defaults (`preserveText`, `preserveInteger`) may be omitted. */
-export type CodecManifestInput = z.input<typeof CodecManifestSchema>;
+export interface CodecManifestInput {
+  version: 1;
+  tables: Record<string, { columns: Record<string, z.input<typeof ColumnSpecSchema>>; primaryKey: string[] }>;
+}
 
 /** Validate and normalise a manifest. Throws `DbKitError('INVALID_MANIFEST')`; the message never quotes a value. */
 export function parseCodecManifest(input: unknown): CodecManifest {

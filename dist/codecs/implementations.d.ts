@@ -17,6 +17,8 @@ export interface CodecImpl {
     /** Dialect-independent string for exact comparison; `value` is the dialect's own representation. */
     canonical(value: unknown, dialect: Dialect): string;
 }
+/** Nesting deeper than this is refused when JSON is parsed, so walking it can never overflow the stack. */
+export declare const MAX_JSON_DEPTH = 512;
 declare function timestampIso(preserveText: boolean): CodecImpl;
 declare function timestampEpoch(microsPerUnit: bigint, unitName: string, preserveInteger: boolean): CodecImpl;
 export declare const IMPLEMENTATIONS: {

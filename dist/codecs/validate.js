@@ -14,7 +14,7 @@ export function validateManifest(manifest, databases) {
     };
     for (const side of SIDES) {
         for (const table of databases[side].keys()) {
-            if (!(table in manifest.tables))
+            if (!Object.hasOwn(manifest.tables, table))
                 issue('undeclared-table', side, table, undefined, `${side} table ${table} is not declared in the manifest`);
         }
     }
@@ -23,6 +23,7 @@ export function validateManifest(manifest, databases) {
             sqlite: toColumnMap(databases.sqlite.get(table)),
             postgres: toColumnMap(databases.postgres.get(table)),
         };
+        const tableOnBothSides = SIDES.every((side) => actual[side]);
         for (const side of SIDES) {
             const columns = actual[side];
             if (!columns) {
@@ -30,13 +31,13 @@ export function validateManifest(manifest, databases) {
                 continue;
             }
             for (const name of columns.keys()) {
-                if (!(name in spec.columns))
+                if (!Object.hasOwn(spec.columns, name))
                     issue('undeclared-column', side, table, name, `${side} column ${table}.${name} is not declared in the manifest`);
             }
         }
         for (const name of Object.keys(spec.columns)) {
             const codec = codecs.column(table, name);
-            let bothSidesOk = true;
+            let bothSidesOk = tableOnBothSides;
             for (const side of SIDES) {
                 const columns = actual[side];
                 if (!columns)

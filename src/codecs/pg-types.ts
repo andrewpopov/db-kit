@@ -8,7 +8,7 @@ const RAW_TEXT_OIDS: ReadonlySet<number> = new Set([
 
 /**
  * `types` option for a `pg` query/client so reads match what the codecs expect: timestamptz and json/jsonb
- * come back as raw text. `int8`, `numeric`, `uuid` and `bytea` already arrive as string/string/string/Buffer.
+ * come back as raw text. Open the handle with `codecSession: true` so that text is UTC, ISO-formatted. `int8`, `numeric`, `uuid` and `bytea` already arrive as string/string/string/Buffer.
  *   pool.query({ text, values, types: POSTGRES_CODEC_TYPES })
  */
 export const POSTGRES_CODEC_TYPES: CustomTypesConfig = {
