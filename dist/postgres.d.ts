@@ -1,6 +1,7 @@
+import type { ConnectionOptions } from 'node:tls';
 import { Pool } from 'pg';
 import type { HealthResult } from './health.js';
-import { type PostgresConfig } from './url.js';
+import { type PostgresConfig, type SslMode } from './url.js';
 export interface PostgresOptions {
     /** Required. Shows up in `pg_stat_activity.application_name`. */
     applicationName: string;
@@ -8,6 +9,11 @@ export interface PostgresOptions {
     statementTimeoutMs?: number;
     /** Max connections in the pool. Default 10. */
     poolSize?: number;
+    /**
+     * Pin `TimeZone=UTC` and `DateStyle=ISO, YMD` on every connection (startup options). Required when reading with
+     * the codecs' `POSTGRES_CODEC_TYPES`: their timestamp text is whatever the session prints. Default false.
+     */
+    codecSession?: boolean;
     /** Close idle connections after this many ms. Default 30000. */
     idleTimeoutMs?: number;
     /** Fail a connection attempt (and pool checkout) after this many ms. Default 10000. */
@@ -27,6 +33,14 @@ export interface PostgresHandle {
     close(): Promise<void>;
 }
 export declare const DEFAULT_STATEMENT_TIMEOUT_MS = 30000;
+/**
+ * TLS per sslmode (libpq naming):
+ *  - disable: no TLS.
+ *  - require: TLS, certificate NOT verified (encryption only; resists passive sniffing, not an active attacker).
+ *  - verify-ca: TLS, certificate chain verified against the CA, hostname NOT checked.
+ *  - verify-full: TLS, chain AND hostname verified.
+ */
+export declare function tlsFor(sslmode: SslMode, ca: string | undefined): ConnectionOptions | false;
 /**
  * Create a `pg.Pool` with fleet settings. Connections are lazy, so a bad
  * host or password surfaces on first use (`health()` or a query), as a

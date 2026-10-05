@@ -11,6 +11,11 @@ export interface PostgresOptions {
   statementTimeoutMs?: number;
   /** Max connections in the pool. Default 10. */
   poolSize?: number;
+  /**
+   * Pin `TimeZone=UTC` and `DateStyle=ISO, YMD` on every connection (startup options). Required when reading with
+   * the codecs' `POSTGRES_CODEC_TYPES`: their timestamp text is whatever the session prints. Default false.
+   */
+  codecSession?: boolean;
   /** Close idle connections after this many ms. Default 30000. */
   idleTimeoutMs?: number;
   /** Fail a connection attempt (and pool checkout) after this many ms. Default 10000. */
@@ -44,7 +49,7 @@ function requireNonNegativeInt(name: string, value: number): void {
  *  - verify-ca: TLS, certificate chain verified against the CA, hostname NOT checked.
  *  - verify-full: TLS, chain AND hostname verified.
  */
-function tlsFor(sslmode: SslMode, ca: string | undefined): ConnectionOptions | false {
+export function tlsFor(sslmode: SslMode, ca: string | undefined): ConnectionOptions | false {
   switch (sslmode) {
     case 'disable':
       return false;
@@ -89,7 +94,7 @@ export function openPostgres(config: PostgresConfig, opts: PostgresOptions): Pos
     password: config.password,
     ssl: tlsFor(config.sslmode, opts.tlsCa),
     application_name: opts.applicationName,
-    options: `-c statement_timeout=${statementTimeoutMs}`,
+    options: `-c statement_timeout=${statementTimeoutMs}${opts.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD' : ''}`,
   };
   const pool = new Pool({
     ...connection,

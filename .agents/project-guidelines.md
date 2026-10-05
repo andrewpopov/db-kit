@@ -3,7 +3,7 @@
 `@andrewpopov/db-kit`: fleet database toolkit. Open SQLite (`better-sqlite3`) or
 Postgres (`pg.Pool`) from a `DATABASE_URL` with fleet-standard settings, and a
 log-safe description of the connection. Status: in progress (PKG-175; v0.1 scope
-item 1, config + connect). Codecs, clone and cluster ops arrive in later tickets.
+item 1, config + connect). The codec manifest landed in PKG-176; clone and cluster ops arrive in later tickets.
 Fleet-wide package rules live in `packages-meta`; this package's source and packed
 exports are authoritative. Prisma apps keep `@andrewpopov/prisma-tools` for provider
 selection; this kit is for Drizzle/raw-driver apps.
@@ -13,6 +13,9 @@ selection; this kit is for Drizzle/raw-driver apps.
 - `src/url.ts`: `parseDatabaseUrl` / `describe`, the zod config schema (discriminated on `dialect`).
 - `src/sqlite.ts`, `src/postgres.ts`: one `open*` each; `src/open.ts` dispatches on dialect.
 - `src/drizzle.ts`: `drizzleFor`, on the `./drizzle` subpath so `drizzle-orm` stays an optional peer.
+- `src/codecs/`: the per-column codec manifest (PKG-176). `manifest.ts` (zod schema), `implementations.ts` (each codec parses
+  either dialect into one logical value and renders it back; `canonical` renders it for comparison), `bound.ts` (NULL rule +
+  `CodecError` naming table.column), `introspect.ts`, `validate.ts`, `pg-types.ts` (`POSTGRES_CODEC_TYPES`, the `pg` read config).
 - `src/errors.ts`: `DbKitError` (typed codes) and `scrubError`.
 - `src/test-support/embedded-pg.ts`: starts a real throwaway Postgres (`embedded-postgres`, temp dir,
   random port, password auth, TLS with a self-signed cert). Never skip the Postgres tests: a skipped dialect is rot.
@@ -29,6 +32,10 @@ selection; this kit is for Drizzle/raw-driver apps.
 - **sslmode defaults to `disable`** (what `pg` does without TLS); remote databases must say
   `require`, `verify-ca` or `verify-full` explicitly. Only `verify-full` checks the hostname.
 - `applicationName` has no default on purpose: it is how an operator finds a connection in `pg_stat_activity`.
+
+- **Codecs never infer and never echo a value.** A column's logical type is declared; `CodecError` messages name
+  table.column and the reason only, since a value may be personal data. The `preserve*` options default to `true`
+  (an engine move keeps existing contracts); only an explicit `false` changes the Postgres column type.
 
 ## Rules
 

@@ -13,7 +13,7 @@ function requireNonNegativeInt(name, value) {
  *  - verify-ca: TLS, certificate chain verified against the CA, hostname NOT checked.
  *  - verify-full: TLS, chain AND hostname verified.
  */
-function tlsFor(sslmode, ca) {
+export function tlsFor(sslmode, ca) {
     switch (sslmode) {
         case 'disable':
             return false;
@@ -56,7 +56,7 @@ export function openPostgres(config, opts) {
         password: config.password,
         ssl: tlsFor(config.sslmode, opts.tlsCa),
         application_name: opts.applicationName,
-        options: `-c statement_timeout=${statementTimeoutMs}`,
+        options: `-c statement_timeout=${statementTimeoutMs}${opts.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD' : ''}`,
     };
     const pool = new Pool({
         ...connection,

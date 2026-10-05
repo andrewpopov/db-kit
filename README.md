@@ -30,7 +30,60 @@ await handle.close(); // idempotent
 | `openPostgres(config, opts)` | `{ dialect, pool, health(), close() }`, `pool` is a `pg.Pool`. |
 | `openDatabase(url, { sqlite?, postgres? })` | Parse, then dispatch on the scheme. |
 | `drizzleFor(handle)` | `drizzle-orm/better-sqlite3` or `drizzle-orm/node-postgres` instance (from `@andrewpopov/db-kit/drizzle`). |
-| `DbKitError` | `code`: `INVALID_DATABASE_URL`, `INVALID_OPTIONS`, `SQLITE_PRAGMA_UNVERIFIED`, `SQLITE_OPEN_FAILED`. |
+| `DbKitError` | `code`: `INVALID_DATABASE_URL`, `INVALID_OPTIONS`, `SQLITE_PRAGMA_UNVERIFIED`, `SQLITE_OPEN_FAILED`, `INVALID_MANIFEST`, `CODEC_NULL`, `CODEC_INVALID`, `CODEC_LOSSY`. |
+| `parseCodecManifest`, `buildCodecs`, `validateManifest`, `introspectSqlite`, `introspectPostgres`, `POSTGRES_CODEC_TYPES`, `CodecError` | Codec manifest, see below. |
+
+## Codec manifest
+
+Moving an app from SQLite to Postgres needs each column's *logical* type, because SQLite cannot tell them apart (`0/1` may be a boolean or an integer, TEXT may be a date or a string). The manifest declares them; nothing is inferred.
+
+```ts
+const manifest = parseCodecManifest({
+  version: 1,
+  tables: {
+    orders: {
+      primaryKey: ['id'],
+      columns: {
+        id: { codec: 'bigint', nullable: false },
+        paid: { codec: 'boolean', nullable: false },
+        placed_at: { codec: 'timestamp-epoch-ms', preserveInteger: false, nullable: false },
+        meta: { codec: 'json-text', preserveText: false, nullable: true },
+        total_cents: { codec: 'integer', nullable: false, generated: true },
+      },
+    },
+  },
+});
+const codecs = buildCodecs(manifest);
+const codec = codecs.column('orders', 'paid');
+codec.toPostgres(1); // true        (read SQLite with .safeIntegers(true) so bigint columns stay exact)
+codec.toSqlite(true); // 1
+codec.canonical(1, 'sqlite') === codec.canonical(true, 'postgres'); // 'true' === 'true'
+validateManifest(manifest, { sqlite: introspectSqlite(sqliteDb), postgres: await introspectPostgres(pool) }); // { ok, issues, generated, report }
+```
+
+Read Postgres with `pool.query({ text, values, types: POSTGRES_CODEC_TYPES })` on a handle opened with `postgres: { applicationName, codecSession: true }`: timestamptz and json/jsonb must arrive as raw text (the default parsers round to milliseconds and pre-parse JSON), and `codecSession` pins `TimeZone=UTC` and `DateStyle=ISO, YMD` so that text is deterministic (the parser also accepts second-resolution offsets such as `+00:09:21`). Values are never inferred and never coerced silently.
+
+| codec | SQLite value | Postgres column | notes |
+|---|---|---|---|
+| `text` | TEXT | `text` | |
+| `integer` | INTEGER | `bigint` (`integer`/`smallint` also accepted) | safe JS integer only; beyond 2^53 is a `CODEC_LOSSY` error |
+| `bigint` | INTEGER as `bigint` | `bigint` | a bigint end to end, never a JS number; outside int64 is lossy |
+| `real` | REAL | `double precision` | NaN and Infinity are refused, and `-0` is refused on the way into SQLite (it stores 0) |
+| `decimal-as-string` | TEXT | `numeric` | exact; plain numeric text only (no exponent, NaN, JS number) |
+| `boolean` | exactly `0` or `1` | `boolean` | `2`, `'1'`, `true` are refused |
+| `timestamp-iso` | TEXT ISO-8601 with an explicit offset | `text` by default (`preserveText: true`), or `timestamptz` (`preserveText: false`) | sub-microsecond precision and years outside 0001-9999 are lossy; converting back writes UTC `...Z` text |
+| `timestamp-epoch-s`, `timestamp-epoch-ms` | INTEGER | `bigint` by default (`preserveInteger: true`), or `timestamptz` (`preserveInteger: false`) | converting back refuses sub-second / sub-millisecond values |
+| `json-text` | TEXT JSON | `text` by default (`preserveText: true`), or `jsonb` (`preserveText: false`) | invalid JSON, duplicate object keys at any depth (no engine keeps both) and nesting deeper than 512 levels are refused; jsonb reorders keys, so compare via `canonical` |
+| `blob` | Buffer | `bytea` | canonical form is the sha256 hex |
+| `uuid-text` | TEXT | `uuid` | written back lowercase |
+
+The preserve options default to `true`: an engine move keeps existing contracts as they are, and only an explicit `false` changes the Postgres column type.
+
+Every column declares `nullable` (required). NULL into a non-nullable column is a `CodecError` (`CODEC_NULL`) naming `table.column`, as is every invalid (`CODEC_INVALID`) or lossy (`CODEC_LOSSY`) value; the message names the column and the reason, never the value. A column with `generated: true` is verified but excluded from `copyColumns(table)`.
+
+`canonical(value, dialect)` returns a dialect-independent string for exact comparison (timestamps as microsecond UTC ISO, JSON with sorted keys, decimals normalised, blobs as sha256 hex, booleans as `true`/`false`) and `null` for a nullable NULL. JSON numbers are compared as exact decimals (`1`, `1.0`, `1e0` and `10e-1` are equal; integers past 2^53 stay distinct) and strings byte-exact after escape normalisation.
+
+`validateManifest` fails on: an undeclared table or column (named, with the side it was found on), a declared table or column missing from either side, a `generated` flag that does not match each engine, and a codec whose expected Postgres type is not the real column type. `ok` is true only with zero issues; `report` is the human-readable form.
 
 ## URL forms
 
