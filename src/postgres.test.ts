@@ -1,13 +1,14 @@
 import { createServer, type AddressInfo, type Socket } from 'node:net';
+import { checkServerIdentity } from 'node:tls';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DbKitError } from './errors.js';
 import { openDatabase } from './open.js';
-import { openPostgres, type PostgresHandle } from './postgres.js';
+import { openPostgres, tlsFor, type PostgresHandle } from './postgres.js';
 import { startThrowawayPostgres, type ThrowawayPostgres } from './test-support/embedded-pg.js';
-import type { PostgresConfig } from './url.js';
+import { parseDatabaseUrl, type PostgresConfig } from './url.js';
 
 let server: ThrowawayPostgres;
-// Certificate with IP SANs only (no DNS name): the configured host, not 'localhost', must be what is verified.
+// Certificate with an IPv4 SAN only (no DNS name): the configured host, not 'localhost', must be what is verified.
 let ipServer: ThrowawayPostgres;
 const handles: PostgresHandle[] = [];
 
@@ -18,7 +19,7 @@ function open(opts: Partial<Parameters<typeof openPostgres>[1]> = {}, config: Pa
 }
 
 beforeAll(async () => {
-  [server, ipServer] = await Promise.all([startThrowawayPostgres(), startThrowawayPostgres('IP:127.0.0.1,IP:::1')]);
+  [server, ipServer] = await Promise.all([startThrowawayPostgres(), startThrowawayPostgres('IP:127.0.0.1')]);
   console.log(`embedded-postgres started in ${server.startupMs} ms on port ${server.config.port}`);
 }, 180_000);
 
@@ -197,10 +198,6 @@ describe('openPostgres', () => {
       expect(result.ok).toBe(false);
     });
 
-    it('IPv6 literal in the SAN passes when the server listens on ::1', async () => {
-      const result = await openIp('::1').health();
-      expect(result.ok, result.error).toBe(true);
-    });
   });
 
   it('statementTimeoutMs: 0 really disables, overriding a role-level default, on every pooled connection', async () => {
@@ -274,5 +271,43 @@ describe('openPostgres', () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => stalled.close(() => resolve()));
     }
+  });
+});
+
+describe('verify-full identity rule (no network: deterministic on any host)', () => {
+  // verify-full installs no custom checker, so Node's own tls.checkServerIdentity decides.
+  const identityFor = (sslmode: 'verify-ca' | 'verify-full') => {
+    const options = tlsFor(sslmode, undefined);
+    if (!options) throw new Error('expected tls options');
+    return options.checkServerIdentity ?? checkServerIdentity;
+  };
+  const cert = (subjectaltname: string) => ({ subjectaltname, subject: { CN: 'ignored' } }) as Parameters<typeof checkServerIdentity>[1];
+  const ipv6Cert = cert('IP Address:0:0:0:0:0:0:0:1');
+  const dnsCert = cert('DNS:localhost');
+
+  it('an IPv6 SAN matches the literal ::1 and not a DNS name or another address', () => {
+    const check = identityFor('verify-full');
+    expect(check('::1', ipv6Cert)).toBeUndefined();
+    expect(check('localhost', ipv6Cert)).toBeInstanceOf(Error);
+    expect(check('::2', ipv6Cert)).toBeInstanceOf(Error);
+    expect(check('127.0.0.1', ipv6Cert)).toBeInstanceOf(Error);
+  });
+
+  it('a DNS SAN matches its name only, never an IP literal', () => {
+    const check = identityFor('verify-full');
+    expect(check('localhost', dnsCert)).toBeUndefined();
+    expect(check('::1', dnsCert)).toBeInstanceOf(Error);
+    expect(check('127.0.0.1', dnsCert)).toBeInstanceOf(Error);
+  });
+
+  it('a bracketed [::1] is not a hostname the check accepts (URL parsing must strip the brackets first)', () => {
+    expect(identityFor('verify-full')('[::1]', ipv6Cert)).toBeInstanceOf(Error);
+    const config = parseDatabaseUrl('postgres://u:p@[::1]:5432/db');
+    expect(config.dialect === 'postgres' && config.host).toBe('::1');
+  });
+
+  it('verify-ca skips the identity check, verify-full does not', () => {
+    expect(identityFor('verify-ca')('anything', dnsCert)).toBeUndefined();
+    expect(identityFor('verify-full')('anything', dnsCert)).toBeInstanceOf(Error);
   });
 });

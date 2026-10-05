@@ -13,7 +13,7 @@ function requireNonNegativeInt(name, value) {
  *  - verify-ca: TLS, certificate chain verified against the CA, hostname NOT checked.
  *  - verify-full: TLS, chain AND hostname verified.
  */
-function tlsFor(sslmode, ca) {
+export function tlsFor(sslmode, ca) {
     switch (sslmode) {
         case 'disable':
             return false;

@@ -2,7 +2,11 @@ export type DbKitErrorCode =
   | 'INVALID_DATABASE_URL'
   | 'INVALID_OPTIONS'
   | 'SQLITE_PRAGMA_UNVERIFIED'
-  | 'SQLITE_OPEN_FAILED';
+  | 'SQLITE_OPEN_FAILED'
+  | 'INVALID_MANIFEST'
+  | 'CODEC_NULL'
+  | 'CODEC_INVALID'
+  | 'CODEC_LOSSY';
 
 /**
  * Typed error for everything db-kit raises itself. Messages are built from

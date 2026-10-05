@@ -1,6 +1,7 @@
+import type { ConnectionOptions } from 'node:tls';
 import { Pool } from 'pg';
 import type { HealthResult } from './health.js';
-import { type PostgresConfig } from './url.js';
+import { type PostgresConfig, type SslMode } from './url.js';
 export interface PostgresOptions {
     /** Required. Shows up in `pg_stat_activity.application_name`. */
     applicationName: string;
@@ -27,6 +28,14 @@ export interface PostgresHandle {
     close(): Promise<void>;
 }
 export declare const DEFAULT_STATEMENT_TIMEOUT_MS = 30000;
+/**
+ * TLS per sslmode (libpq naming):
+ *  - disable: no TLS.
+ *  - require: TLS, certificate NOT verified (encryption only; resists passive sniffing, not an active attacker).
+ *  - verify-ca: TLS, certificate chain verified against the CA, hostname NOT checked.
+ *  - verify-full: TLS, chain AND hostname verified.
+ */
+export declare function tlsFor(sslmode: SslMode, ca: string | undefined): ConnectionOptions | false;
 /**
  * Create a `pg.Pool` with fleet settings. Connections are lazy, so a bad
  * host or password surfaces on first use (`health()` or a query), as a

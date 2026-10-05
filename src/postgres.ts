@@ -44,7 +44,7 @@ function requireNonNegativeInt(name: string, value: number): void {
  *  - verify-ca: TLS, certificate chain verified against the CA, hostname NOT checked.
  *  - verify-full: TLS, chain AND hostname verified.
  */
-function tlsFor(sslmode: SslMode, ca: string | undefined): ConnectionOptions | false {
+export function tlsFor(sslmode: SslMode, ca: string | undefined): ConnectionOptions | false {
   switch (sslmode) {
     case 'disable':
       return false;

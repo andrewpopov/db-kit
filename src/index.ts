@@ -13,3 +13,4 @@ export {
   type SqliteConfig,
   type SslMode,
 } from './url.js';
+export * from './codecs/index.js';
