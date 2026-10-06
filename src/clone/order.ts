@@ -1,11 +1,11 @@
-import type { ColumnSpec, CodecManifest } from '../codecs/manifest.js';
+import { jsonPgType, type ColumnSpec, type CodecManifest } from '../codecs/manifest.js';
 import { quoteIdent } from './catalog.js';
 
 type TableSpec = CodecManifest['tables'][string];
 
 /** Codecs whose Postgres type is text: collatable, and bytewise-ordered with `COLLATE "C"` / SQLite BINARY. */
 function isTextual(spec: ColumnSpec): boolean {
-  return spec.codec === 'text' || (spec.codec === 'timestamp-iso' && spec.preserveText) || (spec.codec === 'json-text' && spec.preserveText);
+  return spec.codec === 'text' || (spec.codec === 'timestamp-iso' && spec.preserveText) || (spec.codec === 'json-text' && jsonPgType(spec) === 'text');
 }
 
 /**

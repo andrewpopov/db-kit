@@ -1,6 +1,7 @@
 import { DbKitError } from '../errors.js';
 import { CodecError } from './errors.js';
 import { IMPLEMENTATIONS, ValueRejection } from './implementations.js';
+import { jsonPgType } from './manifest.js';
 function implementationFor(spec) {
     switch (spec.codec) {
         case 'timestamp-iso':
@@ -10,8 +11,10 @@ function implementationFor(spec) {
         case 'timestamp-epoch-ms':
             return IMPLEMENTATIONS.timestampEpoch(1000n, 'ms', spec.preserveInteger, spec.acceptSqliteDatetimeText);
         case 'json-text':
-            return IMPLEMENTATIONS.jsonText(spec.preserveText);
+            return IMPLEMENTATIONS.jsonText(jsonPgType(spec));
         case 'text':
+        case 'timestamp-naive':
+        case 'date-text':
         case 'integer':
         case 'bigint':
         case 'real':

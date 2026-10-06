@@ -4,7 +4,7 @@ import { quoteIdent } from './catalog.js';
 import { refuse } from './errors.js';
 
 /** Codecs whose SQLite value is TEXT. Everything else (integers, reals, blobs) has no decoding to get wrong. */
-const TEXT_CODECS: ReadonlySet<string> = new Set(['text', 'decimal-as-string', 'timestamp-iso', 'json-text', 'uuid-text']);
+const TEXT_CODECS: ReadonlySet<string> = new Set(['text', 'decimal-as-string', 'timestamp-iso', 'json-text', 'uuid-text', 'timestamp-naive', 'date-text']);
 
 export const readsText = (codec: string): boolean => TEXT_CODECS.has(codec);
 

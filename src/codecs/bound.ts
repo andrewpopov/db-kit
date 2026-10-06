@@ -1,7 +1,7 @@
 import { DbKitError } from '../errors.js';
 import { CodecError } from './errors.js';
 import { IMPLEMENTATIONS, ValueRejection, type CodecImpl, type Dialect, type PgValue, type SqliteValue } from './implementations.js';
-import type { CodecManifest, ColumnSpec } from './manifest.js';
+import { jsonPgType, type CodecManifest, type ColumnSpec } from './manifest.js';
 
 /** One declared column: a codec plus its table.column identity, NULL rule and generated flag. */
 export interface ColumnCodec {
@@ -36,8 +36,10 @@ function implementationFor(spec: ColumnSpec): CodecImpl {
     case 'timestamp-epoch-ms':
       return IMPLEMENTATIONS.timestampEpoch(1_000n, 'ms', spec.preserveInteger, spec.acceptSqliteDatetimeText);
     case 'json-text':
-      return IMPLEMENTATIONS.jsonText(spec.preserveText);
+      return IMPLEMENTATIONS.jsonText(jsonPgType(spec));
     case 'text':
+    case 'timestamp-naive':
+    case 'date-text':
     case 'integer':
     case 'bigint':
     case 'real':

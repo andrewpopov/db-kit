@@ -303,6 +303,28 @@ function timestampIso(preserveText: boolean): CodecImpl {
   });
 }
 
+/** SQLAlchemy's SQLite DATETIME storage, and what Postgres prints for `timestamp`: no `T`, no offset, 1-6 fractional digits. Nothing looser. */
+const NAIVE_DATETIME = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/;
+
+/** Microseconds of a wall-clock `YYYY-MM-DD HH:MM:SS[.f{1,6}]`, taken as if it were UTC (a naive timestamp has no zone; only ordering and equality matter). */
+function parseNaiveDatetime(value: unknown): bigint {
+  const match = typeof value === 'string' ? NAIVE_DATETIME.exec(value) : null;
+  if (!match) return reject('invalid', 'timestamp-naive must be exactly YYYY-MM-DD HH:MM:SS[.ffffff] text (no T, offset or Z)');
+  const [, year = '', month = '', day = '', hour = '', minute = '', second = '', fraction = ''] = match;
+  return parseTimestamp(`${year}-${month}-${day}T${hour}:${minute}:${second}${fraction ? `.${fraction}` : ''}Z`);
+}
+
+/** Microsecond ISO, no offset: `YYYY-MM-DDTHH:MM:SS.ffffff`. */
+const naiveIso = (micros: bigint): string => canonicalTimestamp(micros).slice(0, -1);
+
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function parseDateOnly(value: unknown): string {
+  if (typeof value !== 'string' || !DATE_ONLY.test(value)) return reject('invalid', 'date-text must be exactly YYYY-MM-DD text');
+  parseTimestamp(`${value}T00:00:00Z`);
+  return value;
+}
+
 interface EpochLogical {
   raw: bigint;
   micros: bigint;
@@ -343,6 +365,15 @@ function timestampEpoch(microsPerUnit: bigint, unitName: string, preserveInteger
     canonical: (logical) => (preserveInteger ? logical.raw.toString() : canonicalTimestamp(logical.micros)),
   });
 }
+
+const timestampNaive = implement<bigint>({
+  pgTypes: ['timestamp without time zone'],
+  fromSqlite: (value) => (typeof value === 'string' ? parseNaiveDatetime(value) : reject('invalid', 'timestamp-naive must be TEXT')),
+  fromPg: parseNaiveDatetime,
+  toSqlite: (micros) => naiveIso(micros).replace('T', ' '),
+  toPg: (micros) => naiveIso(micros).replace('T', ' '),
+  canonical: naiveIso,
+});
 
 const identity = <T>(value: T): T => value;
 
@@ -415,12 +446,23 @@ export const IMPLEMENTATIONS = {
     toPg: identity,
     canonical: identity,
   }),
+  'timestamp-naive': timestampNaive,
+  'date-text': implement<string>({
+    pgTypes: ['date'],
+    fromSqlite: (value) => (typeof value === 'string' ? parseDateOnly(value) : reject('invalid', 'date-text must be TEXT')),
+    fromPg: parseDateOnly,
+    toSqlite: identity,
+    toPg: identity,
+    canonical: identity,
+  }),
   timestampIso,
   timestampEpoch,
   jsonText,
 };
 
-function jsonText(preserveText: boolean): CodecImpl {
+/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim); only `jsonb` normalises. */
+function jsonText(pgType: 'text' | 'json' | 'jsonb'): CodecImpl {
+  const preserveText = pgType !== 'jsonb';
   const parse = (value: unknown): string => {
     if (typeof value !== 'string') return reject('invalid', 'JSON must be text (read Postgres with POSTGRES_CODEC_TYPES)');
     parseJson(value);
@@ -428,7 +470,7 @@ function jsonText(preserveText: boolean): CodecImpl {
     return value;
   };
   return implement<string>({
-    pgTypes: preserveText ? ['text'] : ['jsonb'],
+    pgTypes: [pgType],
     fromSqlite: parse,
     fromPg: parse,
     toSqlite: (text) => (preserveText ? text : renderJson(text, false)),

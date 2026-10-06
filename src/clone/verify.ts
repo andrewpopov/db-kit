@@ -9,7 +9,7 @@ import { decodeSourceRow, sourceColumn, textPositions } from './text-read.js';
 
 /**
  * Parsers for the verification reads, fixed here: `pg.types` is process-global, so anything an application registered
- * (a lowercasing TEXT parser, a Date parser) would otherwise decide what the target "says". timestamptz and json/jsonb
+ * (a lowercasing TEXT parser, a Date parser) would otherwise decide what the target "says". timestamp, timestamptz, date and json/jsonb
  * stay raw text, int8 and numeric stay strings (the codecs' contract); an unlisted type arrives as its text.
  */
 /** Hex output only: any other format (`bytea_output=escape`) would otherwise decode to an empty or wrong blob and verify against it. */

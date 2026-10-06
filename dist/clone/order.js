@@ -1,7 +1,8 @@
+import { jsonPgType } from '../codecs/manifest.js';
 import { quoteIdent } from './catalog.js';
 /** Codecs whose Postgres type is text: collatable, and bytewise-ordered with `COLLATE "C"` / SQLite BINARY. */
 function isTextual(spec) {
-    return spec.codec === 'text' || (spec.codec === 'timestamp-iso' && spec.preserveText) || (spec.codec === 'json-text' && spec.preserveText);
+    return spec.codec === 'text' || (spec.codec === 'timestamp-iso' && spec.preserveText) || (spec.codec === 'json-text' && jsonPgType(spec) === 'text');
 }
 /**
  * ORDER BY for the SQLite snapshot: text keys `COLLATE BINARY` (never the column's declared collation), uuid text
