@@ -46,6 +46,9 @@ export interface ForeignKeyFact {
     enforced: boolean;
     conkey: string;
     confkey: string;
+    /** `conkey` / `confkey` as column names, in constraint order. */
+    columns: string[];
+    refColumns: string[];
     conpfeqop: string;
     confdelsetcols: string | null;
     confupdtype: string;

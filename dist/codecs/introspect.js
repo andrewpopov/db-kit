@@ -19,7 +19,7 @@ export function introspectSqlite(db) {
 }
 /** Base tables of one schema (default `public`), zero-column tables included. A column is generated when `is_generated = 'ALWAYS'`; identity columns are not. */
 export async function introspectPostgres(pool, schema = 'public') {
-    const { rows } = await pool.query(`select t.table_name, c.column_name, c.data_type, c.is_generated
+    const { rows } = await pool.query(`select t.table_name, c.column_name, c.data_type, c.is_generated, c.character_maximum_length
        from information_schema.tables t
        left join information_schema.columns c on c.table_schema = t.table_schema and c.table_name = t.table_name
       where t.table_schema = $1 and t.table_type = 'BASE TABLE'
@@ -30,7 +30,7 @@ export async function introspectPostgres(pool, schema = 'public') {
         tables.set(row.table_name, columns);
         if (row.column_name === null || row.data_type === null)
             continue;
-        columns.push({ name: row.column_name, type: row.data_type, generated: row.is_generated === 'ALWAYS' });
+        columns.push({ name: row.column_name, type: row.data_type, generated: row.is_generated === 'ALWAYS', ...(row.character_maximum_length === null ? {} : { maxLength: row.character_maximum_length }) });
     }
     return tables;
 }

@@ -57,6 +57,9 @@ export interface ForeignKeyFact {
   enforced: boolean;
   conkey: string;
   confkey: string;
+  /** `conkey` / `confkey` as column names, in constraint order. */
+  columns: string[];
+  refColumns: string[];
   conpfeqop: string;
   confdelsetcols: string | null;
   confupdtype: string;
@@ -390,6 +393,8 @@ export async function readForeignKeys(client: PostgresQueryable, oids: readonly 
       enforced: boolean;
       conkey: string;
       confkey: string;
+      columns: string[];
+      ref_columns: string[];
       conpfeqop: string;
       confdelsetcols: string | null;
       confupdtype: string;
@@ -406,6 +411,8 @@ export async function readForeignKeys(client: PostgresQueryable, oids: readonly 
               pg_catalog.pg_get_constraintdef(c.oid) as definition,
               c.convalidated as validated, ${versionNum >= 180000 ? 'c.conenforced' : 'true'} as enforced,
               c.conkey::text as conkey, c.confkey::text as confkey, c.conpfeqop::text as conpfeqop,
+              array(select a.attname::text from unnest(c.conkey) with ordinality u(attnum, ord) join pg_catalog.pg_attribute a on a.attrelid = c.conrelid and a.attnum = u.attnum order by u.ord) as columns,
+              array(select a.attname::text from unnest(c.confkey) with ordinality u(attnum, ord) join pg_catalog.pg_attribute a on a.attrelid = c.confrelid and a.attnum = u.attnum order by u.ord) as ref_columns,
               ${versionNum >= 150000 ? 'c.confdelsetcols::text' : 'null::text'} as confdelsetcols,
               c.confupdtype::text as confupdtype, c.confdeltype::text as confdeltype, c.confmatchtype::text as confmatchtype,
               c.condeferrable as deferrable, c.condeferred as deferred,
@@ -433,6 +440,8 @@ export async function readForeignKeys(client: PostgresQueryable, oids: readonly 
       enforced: row.enforced,
       conkey: row.conkey,
       confkey: row.confkey,
+      columns: row.columns,
+      refColumns: row.ref_columns,
       conpfeqop: row.conpfeqop,
       confdelsetcols: row.confdelsetcols,
       confupdtype: row.confupdtype,

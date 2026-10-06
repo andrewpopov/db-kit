@@ -10,6 +10,7 @@ import { readIdentity, readTargetFacts, TARGET_SCHEMA, type ForeignKeyFact, type
 import { CloneRefusal, refuse, toRefusal, type Refusal } from './errors.js';
 import { DEFAULT_MAX_SLOT_RETENTION_BYTES, evaluateGate } from './rules.js';
 import { nonNegativeBigint } from './options.js';
+import { sourceLimitRefusals } from './value-limits.js';
 import { openSnapshot, readSequenceSource, restartValue, scanSource, sqliteSkippedKeyRefusals, type SourceFacts, type SourceTableFacts } from './source.js';
 import { takeSnapshot, type Snapshot, type SnapshotOptions } from './snapshot.js';
 import { isProduction, productionConfirmation, type TopologyEntry } from './topology.js';
@@ -166,7 +167,8 @@ export async function inspectTarget(client: Client, context: SourceContext, plan
   if (production && options.confirmProduction !== confirmation) plan.refusals.push({ code: 'production-unconfirmed' });
   if (identity.inRecovery) return finish();
 
-  const validation = validateManifest(manifest, { sqlite: sqliteSchema, postgres: await introspectPostgres(client, TARGET_SCHEMA) });
+  const postgresSchema = await introspectPostgres(client, TARGET_SCHEMA);
+  const validation = validateManifest(manifest, { sqlite: sqliteSchema, postgres: postgresSchema });
   if (!validation.ok) {
     for (const issue of validation.issues) plan.refusals.push({ code: 'manifest-invalid', table: issue.table, ...(issue.column === undefined ? {} : { column: issue.column }), object: `${issue.side}:${issue.code}` });
     return finish();
@@ -177,6 +179,7 @@ export async function inspectTarget(client: Client, context: SourceContext, plan
   const gate = evaluateGate(facts, manifest, { truncate, maxSlotRetentionBytes: options.maxSlotRetentionBytes ?? DEFAULT_MAX_SLOT_RETENTION_BYTES });
   plan.refusals.push(...gate.refusals);
   plan.foreignKeys = gate.foreignKeys;
+  plan.refusals.push(...sourceLimitRefusals(db, manifest, postgresSchema, gate.foreignKeys));
   plan.incomingReferences = gate.incomingReferences;
   plan.tables = source.tables.map((table) => {
     const targetNonEmpty = facts.nonEmptyTables.includes(table.table);
