@@ -60,6 +60,8 @@ export interface ClonePlan {
   snapshot: { sha256: string; bytes: number };
   target: TargetSummary | null;
   tables: PlannedTable[];
+  /** Tables declared `copy: false`: never copied, verified, emptied or truncated. */
+  skippedTables: { table: string; reason: string }[];
   /** Foreign keys owned by copied tables: dropped before the load and re-added (re-validated) before COMMIT. */
   foreignKeys: ForeignKeyFact[];
   /** Foreign keys from tables clone does not copy into copied ones: untouched, listed for the operator. */
@@ -113,7 +115,7 @@ async function buildPlan(snapshot: Snapshot, options: PlanOptions): Promise<Clon
 }
 
 export function emptyPlan(snapshot: Pick<Snapshot, 'sha256' | 'bytes'>): ClonePlan {
-  return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
+  return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], skippedTables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
 }
 
 /** The snapshot side of a plan: its schema and the one-scan source facts. Shared by planning and execution. */
@@ -142,6 +144,7 @@ export interface TargetInspection {
 export async function inspectTarget(client: Client, context: SourceContext, plan: ClonePlan): Promise<TargetInspection> {
   const { options, db, sqliteSchema, source } = context;
   const { manifest } = options;
+  plan.skippedTables = Object.entries(manifest.skipped).map(([table, { reason }]) => ({ table, reason }));
   let identity: TargetIdentityFacts;
   try {
     identity = await readIdentity(client);
@@ -183,7 +186,7 @@ export async function inspectTarget(client: Client, context: SourceContext, plan
 }
 
 /** Connect one `pg.Client` with a pinned UTC/ISO session (the codecs' read contract). Failure is a typed refusal. */
-export async function connectClient(options: PlanOptions, statementTimeoutMs: number): Promise<Client> {
+export async function connectClient(options: Pick<PlanOptions, 'target' | 'tlsCa' | 'wrapClient'>, statementTimeoutMs: number): Promise<Client> {
   const direct = new Client({
     ...postgresConnectionOptions(options.target, { applicationName: 'db-kit-clone', statementTimeoutMs, tlsCa: options.tlsCa, codecSession: true }),
     types: POSTGRES_CODEC_TYPES,

@@ -16,7 +16,7 @@ const FIXED_PARSERS = new Map([
     [pgTypes.builtins.BOOL, (text) => text === 't'],
     [pgTypes.builtins.BYTEA, (text) => Buffer.from(text.slice(2), 'hex')],
 ]);
-const VERIFY_TYPES = { getTypeParser: (oid) => FIXED_PARSERS.get(oid) ?? ((text) => text) };
+export const VERIFY_TYPES = { getTypeParser: (oid) => FIXED_PARSERS.get(oid) ?? ((text) => text) };
 const HEADER = Buffer.from('db-kit clone row encoding v1\0');
 const NULL_MARK = Buffer.from([0]);
 const VALUE_MARK = Buffer.from([1]);

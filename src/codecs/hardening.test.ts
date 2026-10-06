@@ -8,11 +8,11 @@ import { startThrowawayPostgres, type ThrowawayPostgres } from '../test-support/
 import { buildCodecs, type ColumnCodec } from './bound.js';
 import { CodecError } from './errors.js';
 import { introspectPostgres, introspectSqlite, type IntrospectedSchema } from './introspect.js';
-import { parseCodecManifest, type CodecManifestInput } from './manifest.js';
+import { parseCodecManifest, type CodecManifestInput, type TableInput } from './manifest.js';
 import { POSTGRES_CODEC_TYPES } from './pg-types.js';
 import { validateManifest } from './validate.js';
 
-type Spec = CodecManifestInput['tables'][string]['columns'][string];
+type Spec = TableInput['columns'][string];
 
 function codecOf(spec: Spec): ColumnCodec {
   const manifest = parseCodecManifest({ version: 1, tables: { main: { columns: { id: { codec: 'integer', nullable: false }, col: spec }, primaryKey: ['id'] } } } satisfies CodecManifestInput);

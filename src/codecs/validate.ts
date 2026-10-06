@@ -51,7 +51,7 @@ export function validateManifest(manifest: CodecManifest, databases: Introspecte
 
   for (const side of SIDES) {
     for (const table of databases[side].keys()) {
-      if (!Object.hasOwn(manifest.tables, table)) issue('undeclared-table', side, table, undefined, `${side} table ${table} is not declared in the manifest`);
+      if (!Object.hasOwn(manifest.tables, table) && !Object.hasOwn(manifest.skipped, table)) issue('undeclared-table', side, table, undefined, `${side} table ${table} is not declared in the manifest`);
     }
   }
 

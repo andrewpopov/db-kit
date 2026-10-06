@@ -58,18 +58,37 @@ export const TableSpecSchema = z
     }
   });
 
-export const CodecManifestSchema = z.strictObject({
+/** A table that exists (or may exist) but is never copied or verified: a migration ledger, a derived search table. Still declared, so an UNDECLARED table stays an error. */
+export const SkippedTableSchema = z.strictObject({ copy: z.literal(false), reason: z.string().min(1, 'a skipped table needs a reason') });
+
+const RawManifestSchema = z.strictObject({
   version: z.literal(1),
-  tables: ownRecord(TableSpecSchema),
+  tables: ownRecord(z.union([SkippedTableSchema, TableSpecSchema])),
+});
+
+/** `tables` holds the copied tables; a `{ copy: false, reason }` entry moves to `skipped`. */
+export const CodecManifestSchema = RawManifestSchema.transform((raw) => {
+  const tables: Record<string, z.output<typeof TableSpecSchema>> = {};
+  const skipped: Record<string, { reason: string }> = {};
+  for (const [name, entry] of Object.entries(raw.tables)) {
+    const target = 'copy' in entry ? skipped : tables;
+    Object.defineProperty(target, name, { value: 'copy' in entry ? { reason: entry.reason } : entry, enumerable: true, writable: true, configurable: true });
+  }
+  return { version: raw.version, tables, skipped };
 });
 
 export type ColumnSpec = z.output<typeof ColumnSpecSchema>;
 export type TableSpec = z.output<typeof TableSpecSchema>;
 export type CodecManifest = z.output<typeof CodecManifestSchema>;
 /** What an app writes: option defaults (`preserveText`, `preserveInteger`) may be omitted. */
+export interface TableInput {
+  columns: Record<string, z.input<typeof ColumnSpecSchema>>;
+  primaryKey: string[];
+}
 export interface CodecManifestInput {
   version: 1;
-  tables: Record<string, { columns: Record<string, z.input<typeof ColumnSpecSchema>>; primaryKey: string[] }>;
+  /** A copied table, or `{ copy: false, reason }` for a table that is declared but never copied or verified. */
+  tables: Record<string, TableInput | { copy: false; reason: string }>;
 }
 
 /** Validate and normalise a manifest. Throws `DbKitError('INVALID_MANIFEST')`; the message never quotes a value. */

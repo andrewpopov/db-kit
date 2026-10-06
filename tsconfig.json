@@ -18,6 +18,7 @@
     "dist",
     "src/**/*.test.ts",
     "src/test-support/**",
-    "src/testing/fixtures/**"
+    "src/testing/fixtures/**",
+    "src/clone/fixtures/**"
   ]
 }

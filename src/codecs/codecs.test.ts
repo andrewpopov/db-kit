@@ -3,9 +3,9 @@ import { DbKitError } from '../errors.js';
 import { buildCodecs, type ColumnCodec } from './bound.js';
 import { CodecError } from './errors.js';
 import type { Dialect } from './implementations.js';
-import { parseCodecManifest, type CodecManifestInput } from './manifest.js';
+import { parseCodecManifest, type CodecManifestInput, type TableInput } from './manifest.js';
 
-type Spec = CodecManifestInput['tables'][string]['columns'][string];
+type Spec = TableInput['columns'][string];
 
 function codecOf(spec: Spec, table = 'main', column = 'col'): ColumnCodec {
   const manifest = parseCodecManifest({ version: 1, tables: { [table]: { columns: { id: { codec: 'integer', nullable: false }, [column]: spec }, primaryKey: ['id'] } } } satisfies CodecManifestInput);

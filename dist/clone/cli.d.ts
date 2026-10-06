@@ -1,5 +1,7 @@
 /** The only place the target URL is read from: an argv URL would sit in `ps` and shell history. */
 export declare const TARGET_URL_ENV = "DB_KIT_TARGET_URL";
+/** The reverse clone's source: read from the environment only, for the same reason. */
+export declare const SOURCE_URL_ENV = "DB_KIT_SOURCE_URL";
 export interface CliIo {
     out(text: string): void;
     err(text: string): void;

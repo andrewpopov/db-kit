@@ -8,8 +8,12 @@ function reordersOnConversion(spec) {
     return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && !spec.preserveText);
 }
 const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
-/** Turn catalog facts into refusals: the schema gate, capabilities, emptiness and operational checks of PKG-177 D5-D10 and A1/A3-A5/A7. */
-export function evaluateGate(facts, manifest, options) {
+/**
+ * What must hold of the copied tables whichever direction the data flows: no partitioning or inheritance, no RLS, the
+ * real primary key and NULL rules match the manifest, keys sortable the same way on both sides, no key to a skipped
+ * table. `requireOwnership` is for a target that is written (constraints are dropped and re-added), not for a source.
+ */
+export function evaluateShape(facts, manifest, options) {
     const refusals = [];
     const refuse = (refusal) => void refusals.push(refusal);
     const copied = new Map(facts.tables.map((table) => [table.oid, table.name]));
@@ -20,7 +24,7 @@ export function evaluateGate(facts, manifest, options) {
             refuse({ code: 'inherited-table', table: table.name });
         if (table.rowSecurity)
             refuse({ code: 'row-security-enabled', table: table.name });
-        if (!table.isOwner)
+        if (options.requireOwnership && !table.isOwner)
             refuse({ code: 'not-owner', table: table.name });
         const spec = Object.hasOwn(manifest.tables, table.name) ? manifest.tables[table.name] : undefined;
         if (spec && !sameList(facts.primaryKeys.get(table.name) ?? [], spec.primaryKey))
@@ -35,6 +39,23 @@ export function evaluateGate(facts, manifest, options) {
         if (spec && spec.nullable === column.notNull)
             refuse({ code: 'nullability-mismatch', table: column.table, column: column.column });
     }
+    // A skipped table (`copy: false`) is never loaded or verified, so a key between it and a copied table could not be honoured either way.
+    const isSkipped = (schema, name) => schema === TARGET_SCHEMA && Object.hasOwn(manifest.skipped, name);
+    for (const fk of facts.foreignKeys) {
+        const tableCopied = copied.has(fk.tableOid);
+        const refCopied = copied.has(fk.refOid);
+        if ((tableCopied && isSkipped(fk.refSchema, fk.refTable)) || (refCopied && isSkipped(fk.tableSchema, fk.table))) {
+            refuse({ code: 'foreign-key-to-skipped-table', table: tableCopied ? fk.table : fk.refTable, object: fk.name });
+        }
+    }
+    return refusals;
+}
+/** Turn catalog facts into refusals: the schema gate, capabilities, emptiness and operational checks of PKG-177 D5-D10 and A1/A3-A5/A7. */
+export function evaluateGate(facts, manifest, options) {
+    const refusals = [];
+    const refuse = (refusal) => void refusals.push(refusal);
+    const copied = new Map(facts.tables.map((table) => [table.oid, table.name]));
+    refusals.push(...evaluateShape(facts, manifest, { requireOwnership: true }));
     for (const trigger of facts.triggers)
         refuse({ code: 'trigger-present', table: trigger.table, object: trigger.name });
     for (const rule of facts.rules)

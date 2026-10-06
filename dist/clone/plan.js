@@ -55,7 +55,7 @@ async function buildPlan(snapshot, options) {
     }
 }
 export function emptyPlan(snapshot) {
-    return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
+    return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], skippedTables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
 }
 export function prepareSource(db, options) {
     const sqliteSchema = introspectSqlite(db);
@@ -68,6 +68,7 @@ export function prepareSource(db, options) {
 export async function inspectTarget(client, context, plan) {
     const { options, db, sqliteSchema, source } = context;
     const { manifest } = options;
+    plan.skippedTables = Object.entries(manifest.skipped).map(([table, { reason }]) => ({ table, reason }));
     let identity;
     try {
         identity = await readIdentity(client);

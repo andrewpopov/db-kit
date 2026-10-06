@@ -54,6 +54,11 @@ export interface ClonePlan {
     };
     target: TargetSummary | null;
     tables: PlannedTable[];
+    /** Tables declared `copy: false`: never copied, verified, emptied or truncated. */
+    skippedTables: {
+        table: string;
+        reason: string;
+    }[];
     /** Foreign keys owned by copied tables: dropped before the load and re-added (re-validated) before COMMIT. */
     foreignKeys: ForeignKeyFact[];
     /** Foreign keys from tables clone does not copy into copied ones: untouched, listed for the operator. */
@@ -90,4 +95,4 @@ export interface TargetInspection {
  */
 export declare function inspectTarget(client: Client, context: SourceContext, plan: ClonePlan): Promise<TargetInspection>;
 /** Connect one `pg.Client` with a pinned UTC/ISO session (the codecs' read contract). Failure is a typed refusal. */
-export declare function connectClient(options: PlanOptions, statementTimeoutMs: number): Promise<Client>;
+export declare function connectClient(options: Pick<PlanOptions, 'target' | 'tlsCa' | 'wrapClient'>, statementTimeoutMs: number): Promise<Client>;

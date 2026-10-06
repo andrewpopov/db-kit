@@ -5,15 +5,21 @@ import { parseCodecManifest } from '../codecs/manifest.js';
 import { parseDatabaseUrl } from '../url.js';
 import { CloneOutcomeError, CloneRefusal, describeRefusal, refuse, toRefusal } from './errors.js';
 import { executeClone } from './execute.js';
+import { reverseClone } from './reverse.js';
 import { planClone } from './plan.js';
-import { planToJson, planToText, resultToJson, resultToText } from './render.js';
+import { planToJson, planToText, resultToJson, resultToText, reverseToText } from './render.js';
 import { loadTopology } from './topology.js';
 /** The only place the target URL is read from: an argv URL would sit in `ps` and shell history. */
 export const TARGET_URL_ENV = 'DB_KIT_TARGET_URL';
+/** The reverse clone's source: read from the environment only, for the same reason. */
+export const SOURCE_URL_ENV = 'DB_KIT_SOURCE_URL';
 const CLEANUP_WARNING = 'WARNING: removing the temporary snapshot failed; it holds a full copy of the data, so delete the db-kit-clone-* directory under the temp directory by hand';
 const USAGE = `usage: db-kit clone --from-live <sqlite path> --manifest <file> --writers-stopped (--plan-only | --dry-run | --execute)
          [--topology <file>] [--confirm-production host:port/db] [--truncate] [--json] [--commit-poll-seconds n]
-  target URL: environment variable ${TARGET_URL_ENV}`;
+  target URL: environment variable ${TARGET_URL_ENV}
+       db-kit clone --reverse --to-sqlite <new path> --sqlite-template <empty migrated sqlite file> --manifest <file> --writers-stopped
+         [--dry-run] [--topology <file>] [--confirm-production host:port/db] [--json]
+  source URL (reverse): environment variable ${SOURCE_URL_ENV}`;
 /**
  * Exit codes: 0 plan has no refusals / dry run verified / COMMITTED, 1 refused or failed with the target unchanged,
  * 2 usage error, 4 COMMIT ABORTED (nothing committed), 5 COMMIT outcome UNKNOWN (inspect the target; never re-run blindly).
@@ -27,6 +33,8 @@ export async function runCloneCli(argv, env, io) {
         io.err(USAGE);
         return 2;
     }
+    if (values.reverse)
+        return runReverse(values, env, io);
     if (!values['from-live'] || !values.manifest) {
         io.err(USAGE);
         return 2;
@@ -64,6 +72,45 @@ export async function runCloneCli(argv, env, io) {
         return 1;
     }
 }
+async function runReverse(values, env, io) {
+    if (!values['to-sqlite'] || !values['sqlite-template'] || !values.manifest || values['plan-only'] || values.execute) {
+        io.err(USAGE);
+        return 2;
+    }
+    try {
+        const url = env[SOURCE_URL_ENV];
+        if (url === undefined || url === '')
+            return refuseWith({ code: 'source-url-missing' });
+        let source;
+        try {
+            source = parseDatabaseUrl(url);
+        }
+        catch {
+            return refuseWith({ code: 'source-url-invalid' });
+        }
+        if (source.dialect !== 'postgres')
+            return refuseWith({ code: 'source-not-postgres' });
+        const result = await reverseClone({
+            source,
+            manifest: loadManifest(values.manifest),
+            toSqlitePath: values['to-sqlite'],
+            sqliteTemplatePath: values['sqlite-template'],
+            writersStopped: values['writers-stopped'] === true,
+            dryRun: values['dry-run'] === true,
+            ...(values.topology === undefined ? {} : { topology: loadTopology(values.topology) }),
+            ...(values['confirm-production'] === undefined ? {} : { confirmProduction: values['confirm-production'] }),
+            onProgress: values.json ? undefined : (event) => io.err(`${event.phase} ${event.table}: ${event.rows} rows in ${event.seconds.toFixed(1)}s`),
+        });
+        io.out(values.json ? JSON.stringify(result, null, 2) : reverseToText(result));
+        return 0;
+    }
+    catch (error) {
+        const refusal = error instanceof CloneRefusal ? error.refusal : toRefusal(error);
+        io.err(values.json ? JSON.stringify({ ok: false, refusals: [refusal] }) : `REFUSED: ${describeRefusal(refusal)}`);
+        return 1;
+    }
+}
+const refuseWith = (refusal) => refuse(refusal);
 function parseCommand(argv) {
     return parseArgs({
         args: [...argv],
@@ -79,6 +126,9 @@ function parseCommand(argv) {
             'plan-only': { type: 'boolean' },
             'dry-run': { type: 'boolean' },
             execute: { type: 'boolean' },
+            reverse: { type: 'boolean' },
+            'to-sqlite': { type: 'string' },
+            'sqlite-template': { type: 'string' },
             'commit-poll-seconds': { type: 'string' },
             json: { type: 'boolean' },
         },
