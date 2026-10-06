@@ -1,5 +1,5 @@
 import type BetterSqlite3 from 'better-sqlite3';
-import type { Pool } from 'pg';
+import type { QueryResult, QueryResultRow } from 'pg';
 export interface IntrospectedColumn {
     name: string;
     /** SQLite: the declared type text (may be empty). Postgres: `information_schema` `data_type`. */
@@ -14,5 +14,9 @@ export type IntrospectedSchema = ReadonlyMap<string, readonly IntrospectedColumn
  * with `safeIntegers(false)` so the caller's `defaultSafeIntegers` cannot turn `hidden` into a bigint.
  */
 export declare function introspectSqlite(db: BetterSqlite3.Database): IntrospectedSchema;
+/** A `pg.Pool` or a single `pg.Client`: introspection only reads. */
+export interface PostgresQueryable {
+    query<Row extends QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<Row>>;
+}
 /** Base tables of one schema (default `public`), zero-column tables included. A column is generated when `is_generated = 'ALWAYS'`; identity columns are not. */
-export declare function introspectPostgres(pool: Pool, schema?: string): Promise<IntrospectedSchema>;
+export declare function introspectPostgres(pool: PostgresQueryable, schema?: string): Promise<IntrospectedSchema>;

@@ -6,7 +6,8 @@ export type DbKitErrorCode =
   | 'INVALID_MANIFEST'
   | 'CODEC_NULL'
   | 'CODEC_INVALID'
-  | 'CODEC_LOSSY';
+  | 'CODEC_LOSSY'
+  | 'CLONE_REFUSED';
 
 /**
  * Typed error for everything db-kit raises itself. Messages are built from

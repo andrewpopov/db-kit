@@ -52,9 +52,9 @@ const CASES: Case[] = [
     name: 'timestamp-iso (preserveText)',
     spec: { codec: 'timestamp-iso', preserveText: true, ...notNull },
     sqlite: '2024-03-01T10:00:00+02:00',
-    pg: '2024-03-01T08:00:00.000000Z',
+    pg: '2024-03-01T10:00:00+02:00', // a preserved column is PG text: the same spelling, not a normalised instant
     sqliteOther: '2024-03-01T10:00:00.000001+02:00',
-    pgOther: '2024-03-01 08:00:00.000001+00',
+    pgOther: '2024-03-01T10:00:00.000001+02:00',
   },
   {
     name: 'timestamp-iso (timestamptz)',
@@ -329,5 +329,26 @@ describe('manifest schema', () => {
     expect(codecs.copyColumns('t')).toEqual(['id']);
     expect(() => codecs.column('t', 'ghost')).toThrow(/t\.ghost is not declared/);
     expect(() => codecs.copyColumns('nope')).toThrow(DbKitError);
+  });
+});
+
+describe('preserved columns compare the exact stored value (PKG-177 D3)', () => {
+  const cases = [
+    { name: 'timestamp-iso', preserved: { codec: 'timestamp-iso', preserveText: true, ...notNull }, converting: { codec: 'timestamp-iso', preserveText: false, ...notNull }, a: '2026-01-01T00:00:00Z', b: '2026-01-01T00:00:00.000Z' },
+    { name: 'json-text whitespace', preserved: { codec: 'json-text', preserveText: true, ...notNull }, converting: { codec: 'json-text', preserveText: false, ...notNull }, a: '{"a":1}', b: '{ "a": 1 }' },
+    { name: 'json-text key order and number spelling', preserved: { codec: 'json-text', preserveText: true, ...notNull }, converting: { codec: 'json-text', preserveText: false, ...notNull }, a: '{"a":1,"b":2.0}', b: '{"b":2,"a":1}' },
+  ] as const satisfies readonly { name: string; preserved: Spec; converting: Spec; a: string; b: string }[];
+  for (const c of cases) {
+    it(`${c.name}: unequal under preserve, equal when converting`, () => {
+      expect(codecOf(c.preserved).canonical(c.a, 'sqlite')).not.toBe(codecOf(c.preserved).canonical(c.b, 'sqlite'));
+      expect(codecOf(c.preserved).canonical(c.a, 'sqlite')).toBe(c.a);
+      expect(codecOf(c.converting).canonical(c.a, 'sqlite')).toBe(codecOf(c.converting).canonical(c.b, 'sqlite'));
+    });
+  }
+
+  it('preserved epoch integers canonicalise to the stored integer; converting ones to the instant', () => {
+    const preserved = codecOf({ codec: 'timestamp-epoch-ms', preserveInteger: true, ...notNull });
+    expect(preserved.canonical(1709280000123, 'sqlite')).toBe('1709280000123');
+    expect(preserved.canonical('1709280000123', 'postgres')).toBe('1709280000123');
   });
 });

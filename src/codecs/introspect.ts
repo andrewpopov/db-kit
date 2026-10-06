@@ -1,5 +1,5 @@
 import type BetterSqlite3 from 'better-sqlite3';
-import type { Pool } from 'pg';
+import type { QueryResult, QueryResultRow } from 'pg';
 
 export interface IntrospectedColumn {
   name: string;
@@ -47,8 +47,13 @@ interface PostgresColumnRow {
   is_generated: string | null;
 }
 
+/** A `pg.Pool` or a single `pg.Client`: introspection only reads. */
+export interface PostgresQueryable {
+  query<Row extends QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<Row>>;
+}
+
 /** Base tables of one schema (default `public`), zero-column tables included. A column is generated when `is_generated = 'ALWAYS'`; identity columns are not. */
-export async function introspectPostgres(pool: Pool, schema = 'public'): Promise<IntrospectedSchema> {
+export async function introspectPostgres(pool: PostgresQueryable, schema = 'public'): Promise<IntrospectedSchema> {
   const { rows } = await pool.query<PostgresColumnRow>(
     `select t.table_name, c.column_name, c.data_type, c.is_generated
        from information_schema.tables t

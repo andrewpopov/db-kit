@@ -26,6 +26,23 @@ export function tlsFor(sslmode, ca) {
     }
 }
 /**
+ * The `pg` connection fields shared by the pool and by a single checked-out `Client` (clone preflight).
+ * `statement_timeout` is a startup `options` flag rather than pg's `statement_timeout` field: pg
+ * omits a falsy value, so 0 would silently inherit a role/database default instead of disabling.
+ */
+export function postgresConnectionOptions(config, settings) {
+    return {
+        host: config.host,
+        port: config.port,
+        database: config.database,
+        user: config.user,
+        password: config.password,
+        ssl: tlsFor(config.sslmode, settings.tlsCa),
+        application_name: settings.applicationName,
+        options: `-c statement_timeout=${settings.statementTimeoutMs}${settings.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD' : ''}`,
+    };
+}
+/**
  * Create a `pg.Pool` with fleet settings. Connections are lazy, so a bad
  * host or password surfaces on first use (`health()` or a query), as a
  * password-scrubbed error.
@@ -46,18 +63,7 @@ export function openPostgres(config, opts) {
     if (!Number.isInteger(poolSize) || poolSize < 1)
         throw new DbKitError('INVALID_OPTIONS', 'poolSize must be a positive integer');
     const scrub = (error) => scrubError(error, [config.password]);
-    // `statement_timeout` as a startup `options` flag rather than pg's `statement_timeout` field: pg
-    // omits a falsy value, so 0 would silently inherit a role/database default instead of disabling.
-    const connection = {
-        host: config.host,
-        port: config.port,
-        database: config.database,
-        user: config.user,
-        password: config.password,
-        ssl: tlsFor(config.sslmode, opts.tlsCa),
-        application_name: opts.applicationName,
-        options: `-c statement_timeout=${statementTimeoutMs}${opts.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD' : ''}`,
-    };
+    const connection = postgresConnectionOptions(config, { applicationName: opts.applicationName, statementTimeoutMs, codecSession: opts.codecSession, tlsCa: opts.tlsCa });
     const pool = new Pool({
         ...connection,
         max: poolSize,
