@@ -31,6 +31,8 @@ export function planToText(plan) {
     for (const sequence of plan.sequences) {
         lines.push(`  ${sequence.schema}.${sequence.name} (${sequence.table}.${sequence.column}): ${sequence.restartWith === null ? `RESTART (start ${sequence.start})` : `RESTART WITH ${sequence.restartWith}`}`);
     }
+    for (const skipped of plan.skippedChecks)
+        lines.push(`  ${skipped.code}: ${skipped.table} ${skipped.object}`);
     lines.push(plan.ok ? 'plan OK: no refusals' : `REFUSED (${plan.refusals.length}):`);
     for (const refusal of plan.refusals)
         lines.push(`  ${describeRefusal(refusal)}`);

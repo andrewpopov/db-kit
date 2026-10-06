@@ -36,6 +36,6 @@ export declare const IMPLEMENTATIONS: {
     timestampEpoch: typeof timestampEpoch;
     jsonText: typeof jsonText;
 };
-/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim); only `jsonb` normalises. */
+/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim, duplicate keys included); only `jsonb` normalises, and refuses duplicate keys. */
 declare function jsonText(pgType: 'text' | 'json' | 'jsonb'): CodecImpl;
 export {};

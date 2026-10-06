@@ -1,11 +1,14 @@
 import { rmSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TableInput } from '../codecs/manifest.js';
 import { liveSqlite, manifestOf, scratchDir, targetDatabase, type TargetDatabase } from '../test-support/clone-fixture.js';
 import { startThrowawayPostgres, type ThrowawayPostgres } from '../test-support/embedded-pg.js';
 import { CloneRefusal, type Refusal } from './errors.js';
 import { executeClone } from './execute.js';
+import { planToText } from './render.js';
 import { planClone, type PlanOptions } from './plan.js';
+import { orphanCountSql } from './value-limits.js';
 
 let server: ThrowawayPostgres;
 const dir = scratchDir();
@@ -77,6 +80,17 @@ describe('integer-width', () => {
     expect(await planRefusals((await run('bigint', ['9223372036854775807', '-9223372036854775808'])).options)).toEqual([]);
   });
 
+  it('counts decimal-integer TEXT the integer codec accepts, but not a REAL it refuses', async () => {
+    const text = async (value: string, declared = 'text') =>
+      optionsFor([`create table items(id bigint primary key, n integer not null)`], { items: table({ id: int, n: int }) }, [`create table items(id integer primary key, n ${declared} not null)`, `insert into items values (1, ${value})`]);
+    expect(await planRefusals((await text("'2147483648'")).options)).toEqual([{ code: 'integer-width', table: 'items', column: 'n', object: 'integer, max 2147483648' }]);
+    expect(await planRefusals((await text("'-2147483649'")).options)).toEqual([{ code: 'integer-width', table: 'items', column: 'n', object: 'integer, min -2147483649' }]);
+    expect(await planRefusals((await text("'0002147483647'")).options)).toEqual([]);
+    expect(await planRefusals((await text("'12abc'")).options)).toEqual([]);
+    expect(await planRefusals((await text("'-'")).options)).toEqual([]);
+    expect(await planRefusals((await text('2147483648.5', 'integer')).options)).toEqual([]);
+  });
+
   it('is re-checked under the locks by executeClone', async () => {
     const { db, options } = await run('integer', [2147483648]);
     await expect(executeClone(options)).rejects.toMatchObject({ refusal: { code: 'integer-width', table: 'items', column: 'n' } });
@@ -128,5 +142,72 @@ describe('orphan-foreign-keys', () => {
     expect(error).toBeInstanceOf(CloneRefusal);
     expect((error as CloneRefusal).refusal.code).toBe('orphan-foreign-keys');
     expect((await db.admin.query('select count(*)::int as n from parent')).rows[0]).toEqual({ n: 0 });
+  });
+});
+
+describe('orphan-foreign-keys: only where raw SQLite equality is Postgres equality', () => {
+  const keyed = (pgType: string, codec: string, parentDdl: string, childDdl: string, parentValue: string, childValue: string) =>
+    optionsFor(
+      [
+        `create table parent(id bigint primary key, k ${pgType} not null unique)`,
+        `create table child(id bigint primary key, k ${pgType})`,
+        'alter table child add constraint child_parent_fk foreign key (k) references parent(k)',
+      ],
+      { parent: table({ id: int, k: { codec, nullable: false } as TableInput['columns'][string] }), child: table({ id: int, k: { codec, nullable: true } as TableInput['columns'][string] }) },
+      [`create table parent(id integer primary key, k ${parentDdl} not null)`, `create table child(id integer primary key, k ${childDdl})`, `insert into parent values (1, ${parentValue})`, `insert into child values (1, ${childValue})`],
+    );
+  const planOf = async (options: PlanOptions) => planClone(options);
+
+  it('does not refuse timestamps that spell differently and are the same Postgres timestamp, and says it skipped the check', async () => {
+    const { options } = await keyed('timestamp', 'timestamp-naive', 'text', 'text', "'2026-03-01 10:11:12.1'", "'2026-03-01 10:11:12.100000'");
+    const plan = await planOf(options);
+    expect(plan.refusals).toEqual([]);
+    expect(plan.skippedChecks).toEqual([{ code: 'orphan-check-skipped', table: 'child', object: 'child_parent_fk -> parent: codecs timestamp-naive / timestamp-naive are not compared by raw equality' }]);
+    expect(planToText(plan)).toContain('orphan-check-skipped: child child_parent_fk -> parent');
+  });
+
+  it('does not refuse TEXT-stored integers that spell differently', async () => {
+    const { options } = await keyed('bigint', 'integer', 'text', 'text', "'1'", "'01'");
+    const plan = await planOf(options);
+    expect(plan.refusals).toEqual([]);
+    expect(plan.skippedChecks.map((skipped) => skipped.code)).toEqual(['orphan-check-skipped']);
+  });
+
+  it('does not refuse UUIDs that differ only in case', async () => {
+    const { options } = await keyed('uuid', 'uuid-text', 'text', 'text', "'AAAAAAAA-0000-0000-0000-000000000001'", "'aaaaaaaa-0000-0000-0000-000000000001'");
+    expect((await planOf(options)).refusals).toEqual([]);
+  });
+
+  it('refuses a key SQLite NOCASE or RTRIM would match but Postgres text equality does not', async () => {
+    for (const [collation, child] of [['nocase', "'ABC'"], ['rtrim', "'abc  '"]] as const) {
+      const { options } = await keyed('text', 'text', `text collate ${collation}`, `text collate ${collation}`, "'abc'", child);
+      expect((await planOf(options)).refusals, collation).toEqual([{ code: 'orphan-foreign-keys', table: 'child', object: 'child_parent_fk -> parent, 1 rows' }]);
+    }
+  });
+
+  it('still passes a text key that really matches, and checks it', async () => {
+    const { options } = await keyed('text', 'text', 'text collate nocase', 'text', "'abc'", "'abc'");
+    const plan = await planOf(options);
+    expect(plan.refusals).toEqual([]);
+    expect(plan.skippedChecks).toEqual([]);
+  });
+
+  it('skips (does not guess) an integer key column holding a TEXT value, even a real orphan', async () => {
+    const { options } = await keyed('bigint', 'integer', 'integer', 'text', '1', "'99'");
+    const plan = await planOf(options);
+    expect(plan.refusals).toEqual([]);
+    expect(plan.skippedChecks).toHaveLength(1);
+  });
+
+  it('is linear: SQLite plans an automatic index on an unindexed parent key instead of scanning it per child', () => {
+    const db = new Database(':memory:');
+    db.exec('create table parent(id integer primary key, k integer not null); create table child(id integer primary key, k integer)');
+    const fk = { table: 'child', refTable: 'parent', columns: ['k'], refColumns: ['k'] };
+    for (const kind of ['integer', 'text'] as const) {
+      const details = (db.prepare(`explain query plan ${orphanCountSql(fk, [kind])}`).all() as { detail: string }[]).map((row) => row.detail);
+      expect(details.some((detail) => /^SCAN p\b/.test(detail)), details.join(' | ')).toBe(false);
+      expect(details.join(' | ')).toMatch(/AUTOMATIC (COVERING )?INDEX/);
+    }
+    db.close();
   });
 });

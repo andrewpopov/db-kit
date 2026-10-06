@@ -149,10 +149,10 @@ function canonicalJsonNumber(token: string): string {
 
 /**
  * Re-emit valid JSON text by walking its tokens, never through `JSON.parse` values, so a number keeps every digit.
- * `canonical` also sorts keys and normalises numbers; duplicate keys and nesting past `MAX_JSON_DEPTH` are refused; without it only whitespace
+ * `canonical` also sorts keys and normalises numbers; duplicate keys are refused unless `allowDuplicateKeys` (text kept verbatim) and nesting past `MAX_JSON_DEPTH` is always refused; without it only whitespace
  * is dropped. Strings are decoded and re-encoded, so `"\u0041"` and `"A"` are the same.
  */
-function renderJson(text: string, canonical: boolean): string {
+function renderJson(text: string, canonical: boolean, allowDuplicateKeys = false): string {
   const depthLimit = (): never => reject('invalid', `JSON is nested deeper than ${MAX_JSON_DEPTH} levels`);
   let at = 0;
   const skip = (): void => {
@@ -181,7 +181,7 @@ function renderJson(text: string, canonical: boolean): string {
           const key = str();
           skip();
           at++;
-          if (seen.has(key)) reject('invalid', 'duplicate JSON object key (no engine keeps both, so no faithful mapping exists)');
+          if (!allowDuplicateKeys && seen.has(key)) reject('invalid', 'duplicate JSON object key (no engine keeps both, so no faithful mapping exists)');
           seen.add(key);
           members.push([key, value(depth + 1)]);
           skip();
@@ -460,13 +460,13 @@ export const IMPLEMENTATIONS = {
   jsonText,
 };
 
-/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim); only `jsonb` normalises. */
+/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim, duplicate keys included); only `jsonb` normalises, and refuses duplicate keys. */
 function jsonText(pgType: 'text' | 'json' | 'jsonb'): CodecImpl {
   const preserveText = pgType !== 'jsonb';
   const parse = (value: unknown): string => {
     if (typeof value !== 'string') return reject('invalid', 'JSON must be text (read Postgres with POSTGRES_CODEC_TYPES)');
     parseJson(value);
-    renderJson(value, false); // refuses duplicate keys and excessive depth up front
+    renderJson(value, false, preserveText); // refuses excessive depth, and duplicate keys where a single object must result (jsonb)
     return value;
   };
   return implement<string>({

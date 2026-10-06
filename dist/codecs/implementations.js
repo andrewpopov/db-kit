@@ -120,10 +120,10 @@ function canonicalJsonNumber(token) {
 }
 /**
  * Re-emit valid JSON text by walking its tokens, never through `JSON.parse` values, so a number keeps every digit.
- * `canonical` also sorts keys and normalises numbers; duplicate keys and nesting past `MAX_JSON_DEPTH` are refused; without it only whitespace
+ * `canonical` also sorts keys and normalises numbers; duplicate keys are refused unless `allowDuplicateKeys` (text kept verbatim) and nesting past `MAX_JSON_DEPTH` is always refused; without it only whitespace
  * is dropped. Strings are decoded and re-encoded, so `"\u0041"` and `"A"` are the same.
  */
-function renderJson(text, canonical) {
+function renderJson(text, canonical, allowDuplicateKeys = false) {
     const depthLimit = () => reject('invalid', `JSON is nested deeper than ${MAX_JSON_DEPTH} levels`);
     let at = 0;
     const skip = () => {
@@ -156,7 +156,7 @@ function renderJson(text, canonical) {
                     const key = str();
                     skip();
                     at++;
-                    if (seen.has(key))
+                    if (!allowDuplicateKeys && seen.has(key))
                         reject('invalid', 'duplicate JSON object key (no engine keeps both, so no faithful mapping exists)');
                     seen.add(key);
                     members.push([key, value(depth + 1)]);
@@ -424,14 +424,14 @@ export const IMPLEMENTATIONS = {
     timestampEpoch,
     jsonText,
 };
-/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim); only `jsonb` normalises. */
+/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim, duplicate keys included); only `jsonb` normalises, and refuses duplicate keys. */
 function jsonText(pgType) {
     const preserveText = pgType !== 'jsonb';
     const parse = (value) => {
         if (typeof value !== 'string')
             return reject('invalid', 'JSON must be text (read Postgres with POSTGRES_CODEC_TYPES)');
         parseJson(value);
-        renderJson(value, false); // refuses duplicate keys and excessive depth up front
+        renderJson(value, false, preserveText); // refuses excessive depth, and duplicate keys where a single object must result (jsonb)
         return value;
     };
     return implement({

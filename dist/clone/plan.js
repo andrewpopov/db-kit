@@ -59,7 +59,7 @@ async function buildPlan(snapshot, options) {
     }
 }
 export function emptyPlan(snapshot) {
-    return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], skippedTables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
+    return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], skippedTables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [], skippedChecks: [] };
 }
 export function prepareSource(db, options) {
     const sqliteSchema = introspectSqlite(db);
@@ -106,7 +106,9 @@ export async function inspectTarget(client, context, plan) {
     const gate = evaluateGate(facts, manifest, { truncate, maxSlotRetentionBytes: options.maxSlotRetentionBytes ?? DEFAULT_MAX_SLOT_RETENTION_BYTES });
     plan.refusals.push(...gate.refusals);
     plan.foreignKeys = gate.foreignKeys;
-    plan.refusals.push(...sourceLimitRefusals(db, manifest, postgresSchema, gate.foreignKeys));
+    const limits = sourceLimitRefusals(db, manifest, postgresSchema, gate.foreignKeys);
+    plan.refusals.push(...limits.refusals);
+    plan.skippedChecks.push(...limits.skipped);
     plan.incomingReferences = gate.incomingReferences;
     plan.tables = source.tables.map((table) => {
         const targetNonEmpty = facts.nonEmptyTables.includes(table.table);

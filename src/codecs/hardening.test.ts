@@ -56,18 +56,37 @@ function pg(options: { codecSession?: boolean } = {}): PostgresHandle {
   return handle;
 }
 
-describe('P1 duplicate JSON keys are refused, not collapsed', () => {
-  for (const preserveText of [true, false]) {
-    it(`preserveText=${preserveText}: refused at any depth, in both directions and in canonical`, () => {
-      const codec = codecOf({ codec: 'json-text', preserveText, nullable: false });
-      for (const text of ['{"a":1,"a":2}', '{"x":[{"a":1,"a":2}]}', '{"a":1,"\\u0061":2}']) {
-        expect(errorOf(() => codec.toPostgres(text)).code, text).toBe('CODEC_INVALID');
-        expect(errorOf(() => codec.toSqlite(text)).message, text).toMatch(/^main\.col: .*duplicate/);
-        expect(errorOf(() => codec.canonical(text, 'sqlite')).code, text).toBe('CODEC_INVALID');
+describe('P1 duplicate JSON keys: kept verbatim where the target keeps them, refused where one object must result', () => {
+  const DUPLICATES = ['{"a":1,"a":2}', '{"x":[{"a":1,"a":2}]}', '{"a":1,"\\u0061":2}'];
+
+  for (const pgType of ['text', 'json'] as const) {
+    it(`pgType=${pgType}: stored verbatim, both directions, and compared as exact text`, () => {
+      const codec = codecOf({ codec: 'json-text', pgType, nullable: false });
+      for (const text of DUPLICATES) {
+        expect(codec.toPostgres(text), text).toBe(text);
+        expect(codec.toSqlite(text), text).toBe(text);
+        expect(codec.canonical(text, 'sqlite'), text).toBe(text);
       }
-      expect(codec.toPostgres('{"a":{"a":1},"b":{"a":1}}')).toBe('{"a":{"a":1},"b":{"a":1}}');
+      expect(errorOf(() => codec.toPostgres('{"a":1,')).code).toBe('CODEC_INVALID');
     });
   }
+
+  it('pgType=jsonb: refused at any depth, in both directions and in canonical', () => {
+    const codec = codecOf({ codec: 'json-text', pgType: 'jsonb', nullable: false });
+    for (const text of DUPLICATES) {
+      expect(errorOf(() => codec.toPostgres(text)).code, text).toBe('CODEC_INVALID');
+      expect(errorOf(() => codec.toSqlite(text)).message, text).toMatch(/^main\.col: .*duplicate/);
+      expect(errorOf(() => codec.canonical(text, 'sqlite')).code, text).toBe('CODEC_INVALID');
+    }
+    expect(codec.toPostgres('{"a":{"a":1},"b":{"a":1}}')).toBe('{"a":{"a":1},"b":{"a":1}}');
+  });
+
+  it('NaN and Infinity stay refused for every pgType', () => {
+    for (const pgType of ['text', 'json', 'jsonb'] as const) {
+      const codec = codecOf({ codec: 'json-text', pgType, nullable: false });
+      for (const text of ['{"a":NaN}', '[Infinity]', '{"a":-Infinity}']) expect(errorOf(() => codec.toPostgres(text)).code, `${pgType} ${text}`).toBe('CODEC_INVALID');
+    }
+  });
 });
 
 describe('P1 names that exist on Object.prototype are ordinary names', () => {

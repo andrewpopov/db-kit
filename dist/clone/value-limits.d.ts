@@ -10,4 +10,18 @@ import { type Refusal } from './errors.js';
  * One aggregate scan per table and one anti-join per key. Counts and bounds are reported, never a value.
  * `db` must read integers as bigint (`openSnapshot`).
  */
-export declare function sourceLimitRefusals(db: Database.Database, manifest: CodecManifest, postgres: IntrospectedSchema, foreignKeys: readonly ForeignKeyFact[]): Refusal[];
+export declare function sourceLimitRefusals(db: Database.Database, manifest: CodecManifest, postgres: IntrospectedSchema, foreignKeys: readonly ForeignKeyFact[]): SourceLimitResult;
+/** A check that was not run, and why. Informational: the re-`ADD CONSTRAINT` before COMMIT still refuses a real orphan. */
+export interface SkippedCheck {
+    code: 'orphan-check-skipped';
+    table: string;
+    object: string;
+}
+export interface SourceLimitResult {
+    refusals: Refusal[];
+    skipped: SkippedCheck[];
+}
+type CompareKind = 'integer' | 'text';
+/** A LEFT JOIN, not a correlated `NOT EXISTS`: SQLite builds an automatic index on the parent side, so the scan is linear even when the parent key has no index. */
+export declare function orphanCountSql(fk: Pick<ForeignKeyFact, 'table' | 'refTable' | 'columns' | 'refColumns'>, kinds: readonly CompareKind[]): string;
+export {};
