@@ -17,6 +17,7 @@ selection; this kit is for Drizzle/raw-driver apps.
   either dialect into one logical value and renders it back; `canonical` renders it for comparison), `bound.ts` (NULL rule +
   `CodecError` naming table.column), `introspect.ts`, `validate.ts`, `pg-types.ts` (`POSTGRES_CODEC_TYPES`, the `pg` read config).
 - `src/clone/` (PKG-177a part 1, subpath `./clone`, bin `db-kit`): `snapshot.ts` (verified snapshot via `@andrewpopov/db-backup`), `catalog.ts` (every target catalog read), `rules.ts` (facts to refusals), `source.ts` (snapshot scan, sequence restart values), `plan.ts` (`planClone`), `errors.ts` (the refusal-code allowlist), `cli.ts`; part 2 adds `execute.ts` (the one-transaction clone), `load.ts` (COPY text), `verify.ts` (row-by-row verification), `order.ts` (key ordering on both sides). `scripts/clone-perf.mjs` is the throughput harness.
+- `src/testing/` (PKG-181, subpath `./testing`): `postgres.ts` (`startTestPostgres`, `createTestDatabase`; `embedded-postgres` is an optional peer loaded lazily), `dialects.ts` (`describeEachDialect`; vitest loaded lazily), `parity.ts` (`compareSchemas`). `src/test-support/embedded-pg.ts` is this repo's own thin wrapper over it. `src/testing/fixtures/` is run only by a child vitest and is not built.
 - `src/errors.ts`: `DbKitError` (typed codes) and `scrubError`.
 - `src/test-support/embedded-pg.ts`: starts a real throwaway Postgres (`embedded-postgres`, temp dir,
   random port, password auth, TLS with a self-signed cert). Never skip the Postgres tests: a skipped dialect is rot.

@@ -112,6 +112,28 @@ One `pg.Client`, one transaction (`lock_timeout` 10 s, `statement_timeout` 0, `s
 - **Receipt and COMMIT outcome**: `db_kit.clone_receipt(run_id uuid primary key, started_at timestamptz, manifest_sha text, per_table jsonb)` gets one row before COMMIT, and `txid_current()` is recorded. No COMMIT error is proof of anything (a pooler can give up after the server committed), so the transaction's own `txid_status` decides: asked on the same connection first, then, if that is gone, clone reconnects, re-checks `system_identifier` and database, and polls `txid_status` (bounded by `--commit-poll-seconds`; "in progress" keeps waiting). It reports COMMITTED (the result says `acknowledged: false`), ABORTED or UNKNOWN, and never retries the COMMIT. The receipt row is evidence, not the barrier. The receipt table is locked with the copied tables and re-validated (no trigger, rule, RLS or publication) before the insert. If removing the temporary snapshot fails after the outcome is known, the outcome is kept and reported with `cleanupWarning` / `cleanupFailed` and a stderr warning.
 - **Progress and timing**: one line per table and phase on stderr (suppressed with `--json`); the result carries per-table rows, load/verify seconds, rows/s and the digests. `scripts/clone-perf.mjs` generates a fidash-shaped synthetic SQLite of N GB and times plan, load, verify and commit against a throwaway target (`DB_KIT_TARGET_URL=... node scripts/clone-perf.mjs --gb 1 --reset`). Measured locally (M-series Mac, embedded Postgres 17, 0.9 GB file, 3.1 M rows): load 328 k rows/s (96 MB/s), verify 116 k rows/s, 45 s end to end, peak RSS 521 MB (463 MB at a tenth of the size).
 
+## Testing on both dialects (`@andrewpopov/db-kit/testing`)
+
+A subpath, never loaded by the root entry. It needs two OPTIONAL peers the app installs as **devDependencies**: `embedded-postgres` (a real throwaway Postgres; it never enters the production dependency tree) and `vitest` (only for `describeEachDialect`; `startTestPostgres`, `createTestDatabase` and `compareSchemas` work under any runner). If `embedded-postgres` is missing, `startTestPostgres` throws a `DbKitError` that says to `npm i -D embedded-postgres`.
+
+```ts
+import { describeEachDialect, compareSchemas, startTestPostgres, createTestDatabase } from '@andrewpopov/db-kit/testing';
+
+describeEachDialect('orders repository', ({ dialect, url, open }) => {
+  it('saves and reads an order', async () => {
+    const handle = open();            // a db-kit handle on a fresh SQLite file / a fresh Postgres database
+    await migrate(handle);            // your app's own migration, per dialect
+    // ... url() is the database's URL if you need it
+  });
+});
+```
+
+- `startTestPostgres({ extraFlags?, locale?, tls? })` returns `{ url, config, caPem, startupMs, stop() }`: a real Postgres in a temp directory on a random free port with password auth (no TLS unless `tls: { san? }`, which needs `openssl`). `locale` is `'C'`, a libc locale name, or `'icu:en-US'` (a server built with ICU). `createTestDatabase(server)` makes a fresh `test_<random>` database and returns `{ name, url, config, release() }`; `release()` drops it (open connections are terminated).
+- `describeEachDialect(name, fn, opts?)` runs `fn({ dialect, url, open })` inside `describe('<name> [sqlite]')` and `describe('<name> [postgres]')`: a throwaway SQLite file, and a fresh database on one Postgres server shared by the whole test file (stopped after the file). `url()` and `open()` are functions to call inside tests (`fn` itself runs at collection time); handles from `open()` are closed afterwards. `DB_KIT_TEST_DIALECTS=sqlite|postgres|both` (default both) narrows a run, and a mistyped value throws. **If Postgres is requested and cannot start, its suite fails; it is never skipped.** (vitest lists the tests of a suite whose `beforeAll` threw as skipped under a FAILED suite, and the run exits non-zero.)
+- `compareSchemas(sqliteHandle, pgHandle, { allow?, schema? })` returns `{ ok, differences, allowed, report }`: the schema your migration produced on each side, compared on tables, columns (logical type class, nullability, default presence), primary keys, unique constraints, indexes (partial `WHERE` and expression indexes included) and CHECK constraints. A unique index of plain columns counts as a unique constraint. Index and check expressions are compared after normalising case, quoting, whitespace, parentheses and Postgres casts; names only label a difference. Record intentional differences in `allow` (`{ kind?, table?, name? }`, each given field must match), for example a column that is `boolean` on Postgres and `integer` on SQLite: `{ kind: 'column-type', table: 'users', name: 'active' }`. A dropped partial index on either side fails by name.
+
+Where `embedded-postgres` has actually run (the spike): macOS arm64 with Node 24.14 (local development; first start of a fresh install took 53 s on a busy machine, later starts about 3 to 4 s), `skybox` (linux/x64, Node 24.16, a start takes about 2 s; the full suite including its real-Postgres tests passes there) and `wintop` (the same suite passed there on earlier lane runs, as their `lane: running on wintop` lines show; its platform and architecture were not recorded). Linux aarch64 (bigpi) has NOT been tested with embedded-postgres: the clone throughput harness was only run locally.
+
 ## URL forms
 
 **SQLite**, `file:` and `sqlite:` are equivalent:

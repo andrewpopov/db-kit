@@ -7,6 +7,15 @@ const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8
   peerDependenciesMeta: Record<string, { optional?: boolean }>;
 };
 
+describe('testing entry', () => {
+  it('exports the documented testing API on its own subpath, not on the root', async () => {
+    const testing = await import('./testing.js');
+    expect(Object.keys(testing).sort()).toEqual(['compareSchemas', 'createTestDatabase', 'describeEachDialect', 'dialectsFromEnv', 'normalizeExpression', 'postgresUrl', 'startTestPostgres']);
+    expect(Object.keys(root)).not.toContain('startTestPostgres');
+    expect(Object.keys(root)).not.toContain('describeEachDialect');
+  });
+});
+
 describe('package surface', () => {
   it('root entry exports the documented API and does not pull in drizzle', () => {
     expect(Object.keys(root).sort()).toEqual(

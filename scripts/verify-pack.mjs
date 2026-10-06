@@ -23,7 +23,7 @@ function fail(message) {
   process.exit(1);
 }
 
-const REQUIRED_FILES = ['dist/index.js', 'dist/index.d.ts', 'dist/drizzle.js', 'dist/drizzle.d.ts', 'dist/clone.js', 'dist/clone.d.ts', 'dist/bin.js'];
+const REQUIRED_FILES = ['dist/index.js', 'dist/index.d.ts', 'dist/drizzle.js', 'dist/drizzle.d.ts', 'dist/clone.js', 'dist/clone.d.ts', 'dist/bin.js', 'dist/testing.js', 'dist/testing.d.ts'];
 
 const workDir = mkdtempSync(join(tmpdir(), 'db-kit-verify-'));
 try {
@@ -57,6 +57,11 @@ try {
     import { drizzleFor } from '${pkg.name}/drizzle';
     import { planClone } from '${pkg.name}/clone';
     if (typeof planClone !== 'function') throw new Error('clone subpath export missing');
+    const { startTestPostgres, compareSchemas } = await import('${pkg.name}/testing');
+    if (typeof compareSchemas !== 'function') throw new Error('testing subpath export missing');
+    // embedded-postgres is an optional peer and is NOT installed in this consumer: the error must say what to do
+    const missing = await startTestPostgres().then(() => null, (error) => error);
+    if (!missing || !String(missing.message).includes('npm i -D embedded-postgres')) throw new Error('startTestPostgres did not explain the missing optional peer: ' + missing?.message);
     if (typeof drizzleFor !== 'function') throw new Error('drizzle subpath export missing');
     const handle = openDatabase('file::memory:');
     const health = await handle.health();
