@@ -76,7 +76,7 @@
   },
   "peerDependencies": {
     "drizzle-orm": "^0.45.0",
-    "embedded-postgres": ">=17.0.0-beta.0",
+    "embedded-postgres": ">=17.0.0-beta.0 <19.0.0-0",
     "vitest": ">=1.0.0"
   },
   "peerDependenciesMeta": {
