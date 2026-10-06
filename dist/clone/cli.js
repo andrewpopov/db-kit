@@ -3,16 +3,21 @@ import { parseArgs } from 'node:util';
 import { DbKitError } from '../errors.js';
 import { parseCodecManifest } from '../codecs/manifest.js';
 import { parseDatabaseUrl } from '../url.js';
-import { CloneRefusal, describeRefusal, refuse, toRefusal } from './errors.js';
+import { CloneOutcomeError, CloneRefusal, describeRefusal, refuse, toRefusal } from './errors.js';
+import { executeClone } from './execute.js';
 import { planClone } from './plan.js';
-import { planToJson, planToText } from './render.js';
+import { planToJson, planToText, resultToJson, resultToText } from './render.js';
 import { loadTopology } from './topology.js';
 /** The only place the target URL is read from: an argv URL would sit in `ps` and shell history. */
 export const TARGET_URL_ENV = 'DB_KIT_TARGET_URL';
-const USAGE = `usage: db-kit clone --from-live <sqlite path> --manifest <file> --writers-stopped --plan-only
-         [--topology <file>] [--confirm-production host:port/db] [--truncate] [--json]
+const CLEANUP_WARNING = 'WARNING: removing the temporary snapshot failed; it holds a full copy of the data, so delete the db-kit-clone-* directory under the temp directory by hand';
+const USAGE = `usage: db-kit clone --from-live <sqlite path> --manifest <file> --writers-stopped (--plan-only | --dry-run | --execute)
+         [--topology <file>] [--confirm-production host:port/db] [--truncate] [--json] [--commit-poll-seconds n]
   target URL: environment variable ${TARGET_URL_ENV}`;
-/** Exit codes: 0 plan has no refusals, 1 refused, 2 usage error or an operation this build does not do yet. */
+/**
+ * Exit codes: 0 plan has no refusals / dry run verified / COMMITTED, 1 refused or failed with the target unchanged,
+ * 2 usage error, 4 COMMIT ABORTED (nothing committed), 5 COMMIT outcome UNKNOWN (inspect the target; never re-run blindly).
+ */
 export async function runCloneCli(argv, env, io) {
     let values;
     try {
@@ -26,16 +31,34 @@ export async function runCloneCli(argv, env, io) {
         io.err(USAGE);
         return 2;
     }
-    if (!values['plan-only']) {
-        io.err('clone: only --plan-only is available; the transactional load is not implemented in this build');
+    const modes = [values['plan-only'], values['dry-run'], values.execute].filter((mode) => mode === true).length;
+    if (modes !== 1) {
+        io.err(USAGE);
         return 2;
     }
     try {
-        const plan = await planClone(buildOptions(values, env));
-        io.out(values.json ? planToJson(plan) : planToText(plan));
-        return plan.ok ? 0 : 1;
+        const options = buildOptions(values, env);
+        if (values['plan-only']) {
+            const plan = await planClone(options);
+            io.out(values.json ? planToJson(plan) : planToText(plan));
+            return plan.ok ? 0 : 1;
+        }
+        const result = await executeClone({
+            ...options,
+            dryRun: values['dry-run'] === true,
+            ...(values['commit-poll-seconds'] === undefined ? {} : { commitPollMs: Math.max(0, Number(values['commit-poll-seconds'])) * 1000 }),
+            onProgress: values.json ? undefined : (event) => io.err(`${event.phase} ${event.table}: ${event.rows} rows in ${event.seconds.toFixed(1)}s`),
+        });
+        io.out(values.json ? resultToJson(result) : resultToText(result));
+        if (result.cleanupWarning && !values.json)
+            io.err(CLEANUP_WARNING);
+        return 0;
     }
     catch (error) {
+        if (error instanceof CloneOutcomeError) {
+            io.err(values.json ? JSON.stringify({ ok: false, outcome: error.outcome, runId: error.runId, transactionId: error.transactionId, cleanupFailed: error.cleanupFailed }) : `COMMIT ${error.outcome.toUpperCase()}: run ${error.runId} transaction ${error.transactionId ?? '?'}${error.outcome === 'unknown' ? ' (inspect db_kit.clone_receipt before doing anything else)' : ' (nothing was committed)'}${error.cleanupFailed ? ` -- ${CLEANUP_WARNING}` : ''}`);
+            return error.outcome === 'aborted' ? 4 : 5;
+        }
         const refusal = error instanceof CloneRefusal ? error.refusal : toRefusal(error);
         io.err(values.json ? JSON.stringify({ ok: false, refusals: [refusal] }) : `REFUSED: ${describeRefusal(refusal)}`);
         return 1;
@@ -54,6 +77,9 @@ function parseCommand(argv) {
             'confirm-production': { type: 'string' },
             truncate: { type: 'boolean' },
             'plan-only': { type: 'boolean' },
+            'dry-run': { type: 'boolean' },
+            execute: { type: 'boolean' },
+            'commit-poll-seconds': { type: 'string' },
             json: { type: 'boolean' },
         },
     }).values;

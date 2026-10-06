@@ -1,5 +1,5 @@
 import type { CodecManifest } from '../codecs/manifest.js';
-import { type ForeignKeyFact, type SequenceRef, type TargetFacts } from './catalog.js';
+import { type ForeignKeyFact, type ReceiptFacts, type SequenceRef, type TargetFacts } from './catalog.js';
 import type { Refusal } from './errors.js';
 export declare const DEFAULT_MAX_SLOT_RETENTION_BYTES: bigint;
 export interface RuleOptions {
@@ -20,3 +20,5 @@ export interface GateResult {
 }
 /** Turn catalog facts into refusals: the schema gate, capabilities, emptiness and operational checks of PKG-177 D5-D10 and A1/A3-A5/A7. */
 export declare function evaluateGate(facts: TargetFacts, manifest: CodecManifest, options: RuleOptions): GateResult;
+/** The receipt table is safe to insert into: a plain owned table of exactly the expected shape that nothing else hooks into. */
+export declare function receiptIsSound(table: NonNullable<ReceiptFacts['table']>): boolean;

@@ -34,3 +34,16 @@ export function planToText(plan) {
         lines.push(`  ${describeRefusal(refusal)}`);
     return lines.join('\n');
 }
+export function resultToJson(result) {
+    return JSON.stringify(result, (_key, value) => (typeof value === 'bigint' ? value.toString() : value), 2);
+}
+export function resultToText(result) {
+    const lines = [`${result.outcome === 'committed' ? 'COMMITTED' : 'DRY RUN (rolled back)'} run ${result.runId}`];
+    for (const table of result.tables) {
+        lines.push(`  ${table.table}: ${table.rows} rows, load ${table.loadSeconds.toFixed(1)}s (${Math.round(table.rowsPerSecond)} rows/s), verify ${table.verifySeconds.toFixed(1)}s, sha256 ${table.sha256}`);
+    }
+    lines.push(`total ${result.totals.rows} rows in ${result.totals.seconds.toFixed(1)}s`);
+    if (result.commit)
+        lines.push(`transaction ${result.commit.transactionId}${result.commit.acknowledged ? '' : ' (COMMIT reply was lost; confirmed through txid_status)'}`);
+    return lines.join('\n');
+}

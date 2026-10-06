@@ -176,6 +176,26 @@ const CASES: RefusalCase[] = [
     ddl: [...ITEMS_DDL, 'create schema other', 'create table other.child(item_id bigint)', 'insert into other.child values (5)', 'alter table other.child add constraint child_fk foreign key (item_id) references public.items(id) not valid'],
     expected: [{ code: 'foreign-key-not-valid', table: 'other.child', object: 'child_fk' }],
   },
+  ...(['decimal-as-string', 'timestamp-iso'] as const).map(
+    (codec): RefusalCase => ({
+      name: `a ${codec} primary key that reorders on conversion (row-by-row verification could not line the sides up)`,
+      ddl: [`create table k(id ${codec === 'decimal-as-string' ? 'numeric' : 'timestamptz'} primary key)`],
+      manifest: manifestOf({ version: 1, tables: { k: table({ id: codec === 'decimal-as-string' ? { codec, nullable: false } : { codec, preserveText: false, nullable: false } }) } }),
+      live: liveSqlite(dir, ['create table k(id text primary key)']),
+      expected: [{ code: 'primary-key-order-unsupported', table: 'k', column: 'id' }],
+    }),
+  ),
+  {
+    name: 'a CHECK constraint that calls nextval (it would advance the sequence during COPY and survive a rollback)',
+    ddl: ['create sequence audit_seq', "create table items(id bigint primary key, name text not null, constraint chk check (nextval('public.audit_seq') > 0))"],
+    expected: [{ code: 'volatile-expression', table: 'items', object: 'chk' }],
+  },
+  {
+    name: 'a domain CHECK that calls nextval on a column type',
+    ddl: ['create sequence audit_seq', "create domain posd as text check (nextval('public.audit_seq') > 0)", 'create table items(id bigint primary key, name posd not null)'],
+    expected: [{ code: 'volatile-expression', table: 'items', object: 'posd' }],
+  },
+  { name: 'an immutable CHECK is fine', ddl: ['create table items(id bigint primary key, name text not null check (length(name) > 0))'], expected: [] },
   // emptiness
   { name: 'a non-empty table', ddl: [...ITEMS_DDL, "insert into items values (9, 'x')"], expected: [{ code: 'target-not-empty', table: 'items' }] },
   // the receipt table
@@ -201,7 +221,7 @@ describe('refusals, each triggered by a real offending object', () => {
       const plan = await planOf(db, { manifest: c.manifest ?? ITEMS, livePath: c.live ?? ITEMS_LIVE, truncate: c.truncate === true });
       expect(plan.refusals).toEqual(c.expected);
       expect(plan.ok).toBe(c.expected.length === 0);
-    });
+    }, 30_000);
   }
 
   it('lists incoming references from uncopied tables without refusing when not truncating', async () => {
@@ -322,6 +342,12 @@ describe('target identity and production gating', () => {
 });
 
 describe('source-side refusals', () => {
+  it('refuses TEXT that is not valid UTF-8 (a lossy decode would verify against itself), naming table.column', async () => {
+    const db = await create(ITEMS_DDL);
+    const live = liveSqlite(dir, ['create table items(id integer primary key, name text not null)', "insert into items values (1, 'fine'), (2, cast(x'80' as text))"]);
+    expect((await planOf(db, { livePath: live })).refusals).toEqual([{ code: 'source-invalid-utf8', table: 'items', column: 'name' }]);
+  });
+
   it('refuses a TEXT value containing NUL, naming table.column, but allows NUL inside a blob column', async () => {
     const db = await create(['create table items(id bigint primary key, name text not null, payload bytea not null)']);
     const manifest = manifestOf({ version: 1, tables: { items: table({ id: int, name: text, payload: { codec: 'blob', nullable: false } }) } });

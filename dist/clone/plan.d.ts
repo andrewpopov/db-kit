@@ -1,9 +1,11 @@
+import type Database from 'better-sqlite3';
 import { Client } from 'pg';
+import { type IntrospectedSchema } from '../codecs/introspect.js';
 import type { CodecManifest } from '../codecs/manifest.js';
 import type { PostgresConfig } from '../url.js';
 import { type ForeignKeyFact, type TargetIdentityFacts } from './catalog.js';
 import { type Refusal } from './errors.js';
-import { type SourceTableFacts } from './source.js';
+import { type SourceFacts, type SourceTableFacts } from './source.js';
 import { type Snapshot, type SnapshotOptions } from './snapshot.js';
 import { type TopologyEntry } from './topology.js';
 export interface PlanOptions extends SnapshotOptions {
@@ -68,3 +70,24 @@ export interface ClonePlan {
 export declare function planClone(options: PlanOptions): Promise<ClonePlan>;
 /** Plan from an already-verified snapshot. Like `planClone`, nothing but a `CloneRefusal` ever leaves: driver errors are dropped. */
 export declare function planFromSnapshot(snapshot: Snapshot, options: PlanOptions): Promise<ClonePlan>;
+export declare function emptyPlan(snapshot: Pick<Snapshot, 'sha256' | 'bytes'>): ClonePlan;
+/** The snapshot side of a plan: its schema and the one-scan source facts. Shared by planning and execution. */
+export interface SourceContext {
+    db: Database.Database;
+    options: PlanOptions;
+    sqliteSchema: IntrospectedSchema;
+    source: SourceFacts;
+}
+export declare function prepareSource(db: Database.Database, options: PlanOptions): SourceContext;
+export interface TargetInspection {
+    plan: ClonePlan;
+    /** Null only when the identity could not be read as a refusal-free plan (never: unreadable identity throws). */
+    identity: TargetIdentityFacts;
+}
+/**
+ * Every target-side check, on a client that already has a transaction open with `search_path = ''`. Planning runs it
+ * in a READ ONLY transaction; execution re-runs it under the table locks, where it is authoritative.
+ */
+export declare function inspectTarget(client: Client, context: SourceContext, plan: ClonePlan): Promise<TargetInspection>;
+/** Connect one `pg.Client` with a pinned UTC/ISO session (the codecs' read contract). Failure is a typed refusal. */
+export declare function connectClient(options: PlanOptions, statementTimeoutMs: number): Promise<Client>;

@@ -7,7 +7,8 @@ export type DbKitErrorCode =
   | 'CODEC_NULL'
   | 'CODEC_INVALID'
   | 'CODEC_LOSSY'
-  | 'CLONE_REFUSED';
+  | 'CLONE_REFUSED'
+  | 'CLONE_OUTCOME';
 
 /**
  * Typed error for everything db-kit raises itself. Messages are built from

@@ -1,13 +1,15 @@
+import type Database from 'better-sqlite3';
 import { Client } from 'pg';
-import { introspectPostgres, introspectSqlite } from '../codecs/introspect.js';
+import { introspectPostgres, introspectSqlite, type IntrospectedSchema } from '../codecs/introspect.js';
 import type { CodecManifest } from '../codecs/manifest.js';
+import { POSTGRES_CODEC_TYPES } from '../codecs/pg-types.js';
 import { validateManifest } from '../codecs/validate.js';
 import { postgresConnectionOptions } from '../postgres.js';
 import type { PostgresConfig } from '../url.js';
 import { readIdentity, readTargetFacts, TARGET_SCHEMA, type ForeignKeyFact, type TargetIdentityFacts } from './catalog.js';
 import { CloneRefusal, refuse, toRefusal, type Refusal } from './errors.js';
 import { DEFAULT_MAX_SLOT_RETENTION_BYTES, evaluateGate } from './rules.js';
-import { openSnapshot, readSequenceSource, restartValue, scanSource, type SourceTableFacts } from './source.js';
+import { openSnapshot, readSequenceSource, restartValue, scanSource, type SourceFacts, type SourceTableFacts } from './source.js';
 import { takeSnapshot, type Snapshot, type SnapshotOptions } from './snapshot.js';
 import { isProduction, productionConfirmation, type TopologyEntry } from './topology.js';
 
@@ -91,74 +93,16 @@ export async function planFromSnapshot(snapshot: Snapshot, options: PlanOptions)
 }
 
 async function buildPlan(snapshot: Snapshot, options: PlanOptions): Promise<ClonePlan> {
-  const { manifest } = options;
-  const plan: ClonePlan = {
-    ok: false,
-    snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes },
-    target: null,
-    tables: [],
-    foreignKeys: [],
-    incomingReferences: [],
-    sequences: [],
-    refusals: [],
-  };
-  const finish = (): ClonePlan => ({ ...plan, ok: plan.refusals.length === 0 });
-
+  const plan = emptyPlan(snapshot);
   const db = openSnapshot(snapshot.path);
   try {
-    const sqliteSchema = introspectSqlite(db);
-    const source = scanSource(db, manifest, sqliteSchema);
-    plan.refusals.push(...source.refusals);
-
-    const direct = connectTarget(options);
-    const client = options.wrapClient?.(direct) ?? direct;
-    client.on('error', () => undefined);
-    try {
-      await client.connect();
-    } catch {
-      return refuse({ code: 'target-connect-failed' });
-    }
+    const context = prepareSource(db, options);
+    plan.refusals.push(...context.source.refusals);
+    const client = await connectClient(options, 120_000);
     try {
       await client.query('BEGIN READ ONLY');
       await client.query("SELECT pg_catalog.set_config('search_path', '', true)");
-
-      let identity: TargetIdentityFacts;
-      try {
-        identity = await readIdentity(client);
-      } catch {
-        return refuse({ code: 'target-identity-unreadable' });
-      }
-      const target = { host: options.target.host, port: options.target.port };
-      const confirmation = productionConfirmation({ ...target, database: identity.database });
-      const production = isProduction({ ...target, database: identity.database, systemIdentifier: identity.systemIdentifier }, options.topology);
-      const { serverVersionNum: _versionNum, ...reported } = identity;
-      plan.target = { ...reported, ...target, production, confirmation };
-      if (identity.inRecovery) plan.refusals.push({ code: 'target-in-recovery' });
-      if (production && options.confirmProduction !== confirmation) plan.refusals.push({ code: 'production-unconfirmed' });
-      if (identity.inRecovery) return finish();
-
-      const validation = validateManifest(manifest, { sqlite: sqliteSchema, postgres: await introspectPostgres(client, TARGET_SCHEMA) });
-      if (!validation.ok) {
-        for (const issue of validation.issues) plan.refusals.push({ code: 'manifest-invalid', table: issue.table, ...(issue.column === undefined ? {} : { column: issue.column }), object: `${issue.side}:${issue.code}` });
-        return finish();
-      }
-
-      const facts = await readTargetFacts(client, Object.keys(manifest.tables), identity.serverVersionNum);
-      const truncate = options.truncate === true;
-      const gate = evaluateGate(facts, manifest, { truncate, maxSlotRetentionBytes: options.maxSlotRetentionBytes ?? DEFAULT_MAX_SLOT_RETENTION_BYTES });
-      plan.refusals.push(...gate.refusals);
-      plan.foreignKeys = gate.foreignKeys;
-      plan.incomingReferences = gate.incomingReferences;
-      plan.tables = source.tables.map((table) => {
-        const targetNonEmpty = facts.nonEmptyTables.includes(table.table);
-        return { ...table, targetNonEmpty, willTruncate: targetNonEmpty && truncate };
-      });
-      plan.sequences = gate.sequences.map((sequence) => {
-        const { restartWith, inRange } = restartValue(readSequenceSource(db, sequence.table, sequence.column), sequence);
-        if (!inRange) plan.refusals.push({ code: 'sequence-out-of-range', table: sequence.table, column: sequence.column, object: `${sequence.schema}.${sequence.name}` });
-        return { schema: sequence.schema, name: sequence.name, table: sequence.table, column: sequence.column, start: sequence.start, increment: sequence.increment, min: sequence.min, max: sequence.max, restartWith };
-      });
-      return finish();
+      return (await inspectTarget(client, context, plan)).plan;
     } finally {
       await client.query('ROLLBACK').catch(() => undefined);
       await client.end().catch(() => undefined);
@@ -168,9 +112,89 @@ async function buildPlan(snapshot: Snapshot, options: PlanOptions): Promise<Clon
   }
 }
 
-function connectTarget(options: PlanOptions): Client {
-  return new Client({
-    ...postgresConnectionOptions(options.target, { applicationName: 'db-kit-clone', statementTimeoutMs: 120_000, tlsCa: options.tlsCa }),
+export function emptyPlan(snapshot: Pick<Snapshot, 'sha256' | 'bytes'>): ClonePlan {
+  return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
+}
+
+/** The snapshot side of a plan: its schema and the one-scan source facts. Shared by planning and execution. */
+export interface SourceContext {
+  db: Database.Database;
+  options: PlanOptions;
+  sqliteSchema: IntrospectedSchema;
+  source: SourceFacts;
+}
+
+export function prepareSource(db: Database.Database, options: PlanOptions): SourceContext {
+  const sqliteSchema = introspectSqlite(db);
+  return { db, options, sqliteSchema, source: scanSource(db, options.manifest, sqliteSchema) };
+}
+
+export interface TargetInspection {
+  plan: ClonePlan;
+  /** Null only when the identity could not be read as a refusal-free plan (never: unreadable identity throws). */
+  identity: TargetIdentityFacts;
+}
+
+/**
+ * Every target-side check, on a client that already has a transaction open with `search_path = ''`. Planning runs it
+ * in a READ ONLY transaction; execution re-runs it under the table locks, where it is authoritative.
+ */
+export async function inspectTarget(client: Client, context: SourceContext, plan: ClonePlan): Promise<TargetInspection> {
+  const { options, db, sqliteSchema, source } = context;
+  const { manifest } = options;
+  let identity: TargetIdentityFacts;
+  try {
+    identity = await readIdentity(client);
+  } catch {
+    return refuse({ code: 'target-identity-unreadable' });
+  }
+  const target = { host: options.target.host, port: options.target.port };
+  const confirmation = productionConfirmation({ ...target, database: identity.database });
+  const production = isProduction({ ...target, database: identity.database, systemIdentifier: identity.systemIdentifier }, options.topology);
+  const { serverVersionNum: _versionNum, ...reported } = identity;
+  plan.target = { ...reported, ...target, production, confirmation };
+  const finish = (): TargetInspection => ({ plan: { ...plan, ok: plan.refusals.length === 0 }, identity });
+  if (identity.inRecovery) plan.refusals.push({ code: 'target-in-recovery' });
+  if (production && options.confirmProduction !== confirmation) plan.refusals.push({ code: 'production-unconfirmed' });
+  if (identity.inRecovery) return finish();
+
+  const validation = validateManifest(manifest, { sqlite: sqliteSchema, postgres: await introspectPostgres(client, TARGET_SCHEMA) });
+  if (!validation.ok) {
+    for (const issue of validation.issues) plan.refusals.push({ code: 'manifest-invalid', table: issue.table, ...(issue.column === undefined ? {} : { column: issue.column }), object: `${issue.side}:${issue.code}` });
+    return finish();
+  }
+
+  const facts = await readTargetFacts(client, Object.keys(manifest.tables), identity.serverVersionNum);
+  const truncate = options.truncate === true;
+  const gate = evaluateGate(facts, manifest, { truncate, maxSlotRetentionBytes: options.maxSlotRetentionBytes ?? DEFAULT_MAX_SLOT_RETENTION_BYTES });
+  plan.refusals.push(...gate.refusals);
+  plan.foreignKeys = gate.foreignKeys;
+  plan.incomingReferences = gate.incomingReferences;
+  plan.tables = source.tables.map((table) => {
+    const targetNonEmpty = facts.nonEmptyTables.includes(table.table);
+    return { ...table, targetNonEmpty, willTruncate: targetNonEmpty && truncate };
+  });
+  plan.sequences = gate.sequences.map((sequence) => {
+    const { restartWith, inRange } = restartValue(readSequenceSource(db, sequence.table, sequence.column), sequence);
+    if (!inRange) plan.refusals.push({ code: 'sequence-out-of-range', table: sequence.table, column: sequence.column, object: `${sequence.schema}.${sequence.name}` });
+    return { schema: sequence.schema, name: sequence.name, table: sequence.table, column: sequence.column, start: sequence.start, increment: sequence.increment, min: sequence.min, max: sequence.max, restartWith };
+  });
+  return finish();
+}
+
+/** Connect one `pg.Client` with a pinned UTC/ISO session (the codecs' read contract). Failure is a typed refusal. */
+export async function connectClient(options: PlanOptions, statementTimeoutMs: number): Promise<Client> {
+  const direct = new Client({
+    ...postgresConnectionOptions(options.target, { applicationName: 'db-kit-clone', statementTimeoutMs, tlsCa: options.tlsCa, codecSession: true }),
+    types: POSTGRES_CODEC_TYPES,
     connectionTimeoutMillis: 10_000,
   });
+  const client = options.wrapClient?.(direct) ?? direct;
+  client.on('error', () => undefined);
+  try {
+    await client.connect();
+  } catch {
+    return refuse({ code: 'target-connect-failed' });
+  }
+  return client;
 }

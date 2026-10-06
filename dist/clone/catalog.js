@@ -69,45 +69,7 @@ export async function readTargetFacts(client, tableNames, versionNum) {
     }
     const triggers = (await q(`select t.tgrelid::int as table_oid, t.tgname::text as name from pg_catalog.pg_trigger t where t.tgrelid = any($1::oid[]) and not t.tgisinternal order by 1, 2`, [oids])).map((row) => ({ table: nameOf(row.table_oid), name: row.name }));
     const rules = (await q(`select r.ev_class::int as table_oid, r.rulename::text as name from pg_catalog.pg_rewrite r where r.ev_class = any($1::oid[]) order by 1, 2`, [oids])).map((row) => ({ table: nameOf(row.table_oid), name: row.name }));
-    const foreignKeys = (await q(`select c.oid::int as oid, c.conname::text as name,
-              c.conrelid::int as table_oid, tn.nspname::text as table_schema, t.relname::text as table_name,
-              c.confrelid::int as ref_oid, rn.nspname::text as ref_schema, r.relname::text as ref_table,
-              pg_catalog.pg_get_constraintdef(c.oid) as definition,
-              c.convalidated as validated, ${versionNum >= 180000 ? 'c.conenforced' : 'true'} as enforced,
-              c.conkey::text as conkey, c.confkey::text as confkey, c.conpfeqop::text as conpfeqop,
-              ${versionNum >= 150000 ? 'c.confdelsetcols::text' : 'null::text'} as confdelsetcols,
-              c.confupdtype::text as confupdtype, c.confdeltype::text as confdeltype, c.confmatchtype::text as confmatchtype,
-              c.condeferrable as deferrable, c.condeferred as deferred,
-              (select i.relname::text from pg_catalog.pg_class i where i.oid = c.conindid) as index_name,
-              pg_catalog.obj_description(c.oid, 'pg_constraint') is not null as has_comment
-         from pg_catalog.pg_constraint c
-         join pg_catalog.pg_class t on t.oid = c.conrelid join pg_catalog.pg_namespace tn on tn.oid = t.relnamespace
-         join pg_catalog.pg_class r on r.oid = c.confrelid join pg_catalog.pg_namespace rn on rn.oid = r.relnamespace
-        where c.contype = 'f' and (c.conrelid = any($1::oid[]) or c.confrelid = any($1::oid[]))
-        order by tn.nspname, t.relname, c.conname`, [oids])).map((row) => ({
-        oid: row.oid,
-        name: row.name,
-        tableOid: row.table_oid,
-        tableSchema: row.table_schema,
-        table: row.table_name,
-        refOid: row.ref_oid,
-        refSchema: row.ref_schema,
-        refTable: row.ref_table,
-        definition: row.definition,
-        validated: row.validated,
-        enforced: row.enforced,
-        conkey: row.conkey,
-        confkey: row.confkey,
-        conpfeqop: row.conpfeqop,
-        confdelsetcols: row.confdelsetcols,
-        confupdtype: row.confupdtype,
-        confdeltype: row.confdeltype,
-        confmatchtype: row.confmatchtype,
-        deferrable: row.deferrable,
-        deferred: row.deferred,
-        indexName: row.index_name,
-        hasComment: row.has_comment,
-    }));
+    const foreignKeys = await readForeignKeys(client, oids, versionNum);
     const eventTriggers = (await q('select evtname::text as name from pg_catalog.pg_event_trigger order by 1')).map((row) => row.name);
     const publications = (await q(`select pubname::text as publication, tablename::text as table from pg_catalog.pg_publication_tables
         where schemaname = $1 and tablename = any($2::text[]) order by 1, 2`, [TARGET_SCHEMA, [...tableNames]]));
@@ -155,7 +117,31 @@ export async function readTargetFacts(client, tableNames, versionNum) {
                            and dep.refclassid = 'pg_catalog.pg_class'::regclass and dep.deptype = 'n')
         and n.nspname not in ('pg_catalog', 'information_schema')
       order by 1, 2, 3`);
-    const receipt = await readReceipt(q, versionNum);
+    // Built-in functions are "pinned" and leave no pg_depend row, so the expression trees themselves are read: every
+    // function and operator node in them carries its pg_proc oid (`:funcid` / `:opfuncid`).
+    const volatileExpressions = (await q(`select distinct x.rel::int as table_oid, x.name as object
+         from (
+           select k.conrelid as rel, k.conname::text as name, k.conbin::text as tree
+             from pg_catalog.pg_constraint k where k.conrelid = any($1::oid[]) and k.contype = 'c'
+           union all
+           select i.indrelid, ic.relname::text, coalesce(i.indexprs::text, '') || coalesce(i.indpred::text, '')
+             from pg_catalog.pg_index i join pg_catalog.pg_class ic on ic.oid = i.indexrelid where i.indrelid = any($1::oid[])
+           union all
+           select ad.adrelid, a.attname::text, ad.adbin::text
+             from pg_catalog.pg_attrdef ad join pg_catalog.pg_attribute a on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+            where ad.adrelid = any($1::oid[]) and a.attgenerated <> ''
+           union all
+           select a.attrelid, t.typname::text, k.conbin::text
+             from pg_catalog.pg_attribute a
+             join pg_catalog.pg_type t on t.oid = a.atttypid and t.typtype = 'd'
+             join pg_catalog.pg_constraint k on k.contypid = t.oid
+            where a.attrelid = any($1::oid[]) and a.attnum > 0 and not a.attisdropped
+         ) x
+        where x.tree is not null
+          and exists (select 1 from pg_catalog.regexp_matches(x.tree, ':(?:funcid|opfuncid) ([0-9]+)', 'g') m(g)
+                        join pg_catalog.pg_proc p on p.oid = m.g[1]::oid where p.provolatile = 'v')
+        order by 1, 2`, [oids])).map((row) => ({ table: nameOf(row.table_oid), object: row.object }));
+    const receipt = await readReceiptFacts(client, versionNum);
     const nonEmptyTables = [];
     for (const table of tables) {
         const [{ non_empty: nonEmpty } = { non_empty: false }] = await q(`select exists (select 1 from ${quoteIdent(TARGET_SCHEMA)}.${quoteIdent(table.name)}) as non_empty`);
@@ -177,13 +163,59 @@ export async function readTargetFacts(client, tableNames, versionNum) {
         subscriptionCount: Number(subscriptions),
         sequenceRefs,
         dynamicSequenceDefaults,
+        volatileExpressions,
         receipt,
         nonEmptyTables,
         archiverFailedRecently: failing,
         slots,
     };
 }
-async function readReceipt(q, versionNum) {
+/** Every foreign key owned by or pointing at one of `oids`, with the catalog fields A1 compares. */
+export async function readForeignKeys(client, oids, versionNum) {
+    const q = async (text, values = []) => (await client.query(text, values)).rows;
+    return (await q(`select c.oid::int as oid, c.conname::text as name,
+              c.conrelid::int as table_oid, tn.nspname::text as table_schema, t.relname::text as table_name,
+              c.confrelid::int as ref_oid, rn.nspname::text as ref_schema, r.relname::text as ref_table,
+              pg_catalog.pg_get_constraintdef(c.oid) as definition,
+              c.convalidated as validated, ${versionNum >= 180000 ? 'c.conenforced' : 'true'} as enforced,
+              c.conkey::text as conkey, c.confkey::text as confkey, c.conpfeqop::text as conpfeqop,
+              ${versionNum >= 150000 ? 'c.confdelsetcols::text' : 'null::text'} as confdelsetcols,
+              c.confupdtype::text as confupdtype, c.confdeltype::text as confdeltype, c.confmatchtype::text as confmatchtype,
+              c.condeferrable as deferrable, c.condeferred as deferred,
+              (select i.relname::text from pg_catalog.pg_class i where i.oid = c.conindid) as index_name,
+              pg_catalog.obj_description(c.oid, 'pg_constraint') is not null as has_comment
+         from pg_catalog.pg_constraint c
+         join pg_catalog.pg_class t on t.oid = c.conrelid join pg_catalog.pg_namespace tn on tn.oid = t.relnamespace
+         join pg_catalog.pg_class r on r.oid = c.confrelid join pg_catalog.pg_namespace rn on rn.oid = r.relnamespace
+        where c.contype = 'f' and (c.conrelid = any($1::oid[]) or c.confrelid = any($1::oid[]))
+        order by tn.nspname, t.relname, c.conname`, [[...oids]])).map((row) => ({
+        oid: row.oid,
+        name: row.name,
+        tableOid: row.table_oid,
+        tableSchema: row.table_schema,
+        table: row.table_name,
+        refOid: row.ref_oid,
+        refSchema: row.ref_schema,
+        refTable: row.ref_table,
+        definition: row.definition,
+        validated: row.validated,
+        enforced: row.enforced,
+        conkey: row.conkey,
+        confkey: row.confkey,
+        conpfeqop: row.conpfeqop,
+        confdelsetcols: row.confdelsetcols,
+        confupdtype: row.confupdtype,
+        confdeltype: row.confdeltype,
+        confmatchtype: row.confmatchtype,
+        deferrable: row.deferrable,
+        deferred: row.deferred,
+        indexName: row.index_name,
+        hasComment: row.has_comment,
+    }));
+}
+/** `db_kit.clone_receipt`: whether it exists and everything the safety rules need to know about it. */
+export async function readReceiptFacts(client, versionNum) {
+    const q = async (text, values = []) => (await client.query(text, values)).rows;
     const adopting = (await q(`select p.pubname::text as name from pg_catalog.pg_publication p
         where p.puballtables${versionNum >= 150000
         ? ` or exists (select 1 from pg_catalog.pg_publication_namespace pn join pg_catalog.pg_namespace n on n.oid = pn.pnnspid where pn.pnpubid = p.oid and n.nspname = $1::text)`
@@ -197,7 +229,7 @@ async function readReceipt(q, versionNum) {
             exists (select 1 from pg_catalog.pg_rewrite r where r.ev_class = c.oid) as has_rule,
             exists (select 1 from pg_catalog.pg_publication_tables p where p.schemaname = $1::text and p.tablename = $2::text) as published,
             (select coalesce(jsonb_object_agg(a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)), '{}'::jsonb)
-               from pg_catalog.pg_attribute a where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped) as columns,
+               from pg_catalog.pg_attribute a where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped)::text as columns,
             array(select a.attname::text from pg_catalog.pg_constraint k
                     cross join lateral unnest(k.conkey) with ordinality u(attnum, ord)
                     join pg_catalog.pg_attribute a on a.attrelid = k.conrelid and a.attnum = u.attnum
@@ -209,7 +241,7 @@ async function readReceipt(q, versionNum) {
         adoptingPublications: adopting,
         canCreate: schema?.can_create ?? false,
         table: table
-            ? { kind: table.kind, isOwner: table.is_owner, rowSecurity: table.rls, hasTrigger: table.has_trigger, hasRule: table.has_rule, published: table.published, columns: table.columns, primaryKey: table.pk }
+            ? { kind: table.kind, isOwner: table.is_owner, rowSecurity: table.rls, hasTrigger: table.has_trigger, hasRule: table.has_rule, published: table.published, columns: JSON.parse(table.columns), primaryKey: table.pk }
             : null,
     };
 }

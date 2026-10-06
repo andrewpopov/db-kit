@@ -1,6 +1,12 @@
 import { RECEIPT_COLUMNS, RECEIPT_PRIMARY_KEY, RECEIPT_SCHEMA, RECEIPT_TABLE, TARGET_SCHEMA } from './catalog.js';
 const RECEIPT_REFUSAL = { code: 'receipt-table-invalid', table: `${RECEIPT_SCHEMA}.${RECEIPT_TABLE}` };
 export const DEFAULT_MAX_SLOT_RETENTION_BYTES = 5n * 1024n ** 3n;
+/** A primary-key column whose order differs between SQLite text and the Postgres type it converts to, so row-by-row verification cannot line the two sides up. */
+function reordersOnConversion(spec) {
+    if (!spec)
+        return false;
+    return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && !spec.preserveText);
+}
 const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
 /** Turn catalog facts into refusals: the schema gate, capabilities, emptiness and operational checks of PKG-177 D5-D10 and A1/A3-A5/A7. */
 export function evaluateGate(facts, manifest, options) {
@@ -19,6 +25,10 @@ export function evaluateGate(facts, manifest, options) {
         const spec = Object.hasOwn(manifest.tables, table.name) ? manifest.tables[table.name] : undefined;
         if (spec && !sameList(facts.primaryKeys.get(table.name) ?? [], spec.primaryKey))
             refuse({ code: 'primary-key-mismatch', table: table.name });
+        for (const name of spec?.primaryKey ?? []) {
+            if (reordersOnConversion(spec?.columns[name]))
+                refuse({ code: 'primary-key-order-unsupported', table: table.name, column: name });
+        }
     }
     for (const column of facts.columns) {
         const spec = Object.hasOwn(manifest.tables, column.table) ? manifest.tables[column.table]?.columns[column.column] : undefined;
@@ -54,21 +64,14 @@ export function evaluateGate(facts, manifest, options) {
     for (const use of facts.dynamicSequenceDefaults) {
         refuse({ code: 'sequence-dynamic-default', table: use.schema === TARGET_SCHEMA ? use.table : `${use.schema}.${use.table}`, column: use.column });
     }
+    for (const expression of facts.volatileExpressions)
+        refuse({ code: 'volatile-expression', table: expression.table, object: expression.object });
     const sequences = classifySequences(facts.sequenceRefs, copied, refuse);
     const { receipt } = facts;
     for (const publication of receipt.adoptingPublications)
         refuse({ ...RECEIPT_REFUSAL, object: publication });
     if (receipt.table) {
-        const columnsMatch = sameList(Object.keys(receipt.table.columns).sort(), Object.keys(RECEIPT_COLUMNS).sort()) && Object.entries(RECEIPT_COLUMNS).every(([name, type]) => receipt.table?.columns[name] === type);
-        const sound = receipt.table.kind === 'r' &&
-            receipt.table.isOwner &&
-            !receipt.table.rowSecurity &&
-            !receipt.table.hasTrigger &&
-            !receipt.table.hasRule &&
-            !receipt.table.published &&
-            columnsMatch &&
-            sameList(receipt.table.primaryKey, RECEIPT_PRIMARY_KEY);
-        if (!sound)
+        if (!receiptIsSound(receipt.table))
             refuse(RECEIPT_REFUSAL);
     }
     else if (!receipt.canCreate) {
@@ -83,6 +86,11 @@ export function evaluateGate(facts, manifest, options) {
         if (slot.retainedBytes > options.maxSlotRetentionBytes)
             refuse({ code: 'replication-slot-lag', object: slot.name });
     return { refusals, foreignKeys, incomingReferences, sequences };
+}
+/** The receipt table is safe to insert into: a plain owned table of exactly the expected shape that nothing else hooks into. */
+export function receiptIsSound(table) {
+    const columnsMatch = sameList(Object.keys(table.columns).sort(), Object.keys(RECEIPT_COLUMNS).sort()) && Object.entries(RECEIPT_COLUMNS).every(([name, type]) => table.columns[name] === type);
+    return table.kind === 'r' && table.isOwner && !table.rowSecurity && !table.hasTrigger && !table.hasRule && !table.published && columnsMatch && sameList(table.primaryKey, RECEIPT_PRIMARY_KEY);
 }
 /**
  * A sequence is clone-safe only when it belongs to exactly one column of a copied table (OWNED BY or identity) and
