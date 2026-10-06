@@ -41,6 +41,27 @@ export declare const DEFAULT_STATEMENT_TIMEOUT_MS = 30000;
  *  - verify-full: TLS, chain AND hostname verified.
  */
 export declare function tlsFor(sslmode: SslMode, ca: string | undefined): ConnectionOptions | false;
+export interface PostgresConnectionSettings {
+    applicationName: string;
+    statementTimeoutMs: number;
+    codecSession?: boolean | undefined;
+    tlsCa?: string | undefined;
+}
+/**
+ * The `pg` connection fields shared by the pool and by a single checked-out `Client` (clone preflight).
+ * `statement_timeout` is a startup `options` flag rather than pg's `statement_timeout` field: pg
+ * omits a falsy value, so 0 would silently inherit a role/database default instead of disabling.
+ */
+export declare function postgresConnectionOptions(config: PostgresConfig, settings: PostgresConnectionSettings): {
+    host: string;
+    port: number;
+    database: string;
+    user: string | undefined;
+    password: string | undefined;
+    ssl: false | ConnectionOptions;
+    application_name: string;
+    options: string;
+};
 /**
  * Create a `pg.Pool` with fleet settings. Connections are lazy, so a bad
  * host or password surfaces on first use (`health()` or a query), as a

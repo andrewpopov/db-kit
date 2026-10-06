@@ -29,7 +29,8 @@ function freePort(): Promise<number> {
 
 /** Start a real Postgres in a temp dir on a random free port with password auth. Torn down by `stop()`. */
 /** `san` is the certificate's subjectAltName (default only `DNS:localhost`, so 127.0.0.1 does not match). */
-export async function startThrowawayPostgres(san = 'DNS:localhost'): Promise<ThrowawayPostgres> {
+/** `extraFlags` are appended to the server's command line (`-c name=value` pairs). */
+export async function startThrowawayPostgres(san = 'DNS:localhost', extraFlags: readonly string[] = []): Promise<ThrowawayPostgres> {
   const started = performance.now();
   const dir = mkdtempSync(join(tmpdir(), 'db-kit-pg-'));
   const port = await freePort();
@@ -42,7 +43,7 @@ export async function startThrowawayPostgres(san = 'DNS:localhost'): Promise<Thr
     { stdio: 'ignore' },
   );
   const server = new EmbeddedPostgres({
-    postgresFlags: ['-c', 'ssl=on', '-c', `ssl_cert_file=${cert}`, '-c', `ssl_key_file=${key}`],
+    postgresFlags: ['-c', 'ssl=on', '-c', `ssl_cert_file=${cert}`, '-c', `ssl_key_file=${key}`, ...extraFlags],
     databaseDir: join(dir, 'data'),
     user: 'postgres',
     password,

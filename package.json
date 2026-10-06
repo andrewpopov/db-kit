@@ -31,6 +31,10 @@
       "types": "./dist/drizzle.d.ts",
       "default": "./dist/drizzle.js"
     },
+    "./clone": {
+      "types": "./dist/clone.d.ts",
+      "default": "./dist/clone.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -58,6 +62,7 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
+    "@andrewpopov/db-backup": "github:andrewpopov/db-backup#v0.21.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/pg": "^8.15.0",
     "better-sqlite3": "^13.0.0",
@@ -80,5 +85,8 @@
     "embedded-postgres": "17.10.0-beta.17",
     "typescript": "^5.5.0",
     "vitest": "^4.1.10"
+  },
+  "bin": {
+    "db-kit": "dist/bin.js"
   }
 }

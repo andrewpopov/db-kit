@@ -298,7 +298,8 @@ function timestampIso(preserveText: boolean): CodecImpl {
     },
     toSqlite: (logical) => (preserveText ? logical.text : formatTimestamp(logical.micros, 'shortest')),
     toPg: (logical) => (preserveText ? logical.text : formatTimestamp(logical.micros, 'microseconds')),
-    canonical: (logical) => canonicalTimestamp(logical.micros),
+    // Preserved text is compared exactly: two spellings of one instant are different stored values.
+    canonical: (logical) => (preserveText ? logical.text : canonicalTimestamp(logical.micros)),
   });
 }
 
@@ -320,7 +321,7 @@ function timestampEpoch(microsPerUnit: bigint, unitName: string, preserveInteger
     },
     toSqlite: (logical) => Number(logical.raw),
     toPg: (logical) => (preserveInteger ? logical.raw : formatTimestamp(logical.micros, 'microseconds')),
-    canonical: (logical) => canonicalTimestamp(logical.micros),
+    canonical: (logical) => (preserveInteger ? logical.raw.toString() : canonicalTimestamp(logical.micros)),
   });
 }
 
@@ -413,6 +414,7 @@ function jsonText(preserveText: boolean): CodecImpl {
     fromPg: parse,
     toSqlite: (text) => (preserveText ? text : renderJson(text, false)),
     toPg: (text) => text,
-    canonical: (text) => renderJson(text, true),
+    // Preserved text is compared exactly: whitespace, key order and number spelling are part of the stored value.
+    canonical: (text) => (preserveText ? text : renderJson(text, true)),
   });
 }

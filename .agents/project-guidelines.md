@@ -16,6 +16,7 @@ selection; this kit is for Drizzle/raw-driver apps.
 - `src/codecs/`: the per-column codec manifest (PKG-176). `manifest.ts` (zod schema), `implementations.ts` (each codec parses
   either dialect into one logical value and renders it back; `canonical` renders it for comparison), `bound.ts` (NULL rule +
   `CodecError` naming table.column), `introspect.ts`, `validate.ts`, `pg-types.ts` (`POSTGRES_CODEC_TYPES`, the `pg` read config).
+- `src/clone/` (PKG-177a part 1, subpath `./clone`, bin `db-kit`): `snapshot.ts` (verified snapshot via `@andrewpopov/db-backup`), `catalog.ts` (every target catalog read), `rules.ts` (facts to refusals), `source.ts` (snapshot scan, sequence restart values), `plan.ts` (`planClone`), `errors.ts` (the refusal-code allowlist), `cli.ts`. Read-only: the load is a later ticket.
 - `src/errors.ts`: `DbKitError` (typed codes) and `scrubError`.
 - `src/test-support/embedded-pg.ts`: starts a real throwaway Postgres (`embedded-postgres`, temp dir,
   random port, password auth, TLS with a self-signed cert). Never skip the Postgres tests: a skipped dialect is rot.

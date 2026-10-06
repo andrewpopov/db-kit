@@ -1,4 +1,4 @@
-export type DbKitErrorCode = 'INVALID_DATABASE_URL' | 'INVALID_OPTIONS' | 'SQLITE_PRAGMA_UNVERIFIED' | 'SQLITE_OPEN_FAILED' | 'INVALID_MANIFEST' | 'CODEC_NULL' | 'CODEC_INVALID' | 'CODEC_LOSSY';
+export type DbKitErrorCode = 'INVALID_DATABASE_URL' | 'INVALID_OPTIONS' | 'SQLITE_PRAGMA_UNVERIFIED' | 'SQLITE_OPEN_FAILED' | 'INVALID_MANIFEST' | 'CODEC_NULL' | 'CODEC_INVALID' | 'CODEC_LOSSY' | 'CLONE_REFUSED';
 /**
  * Typed error for everything db-kit raises itself. Messages are built from
  * structural facts (scheme, field name, pragma name), never from the URL, so

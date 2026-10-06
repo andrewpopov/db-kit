@@ -1,0 +1,150 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { appendFileSync, closeSync, copyFileSync, existsSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { createSqliteSnapshot } from '@andrewpopov/db-backup';
+import { liveSqlite, scratchDir } from '../test-support/clone-fixture.js';
+import { CloneRefusal, type Refusal } from './errors.js';
+import { takeSnapshot } from './snapshot.js';
+
+const dir = scratchDir();
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+const ROWS = ['create table items(id integer primary key, name text not null)', "insert into items values (1, 'a'), (2, 'b')"];
+
+async function refusalOf(run: () => Promise<unknown>): Promise<Refusal> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof CloneRefusal) return error.refusal;
+    throw error;
+  }
+  throw new Error('expected a CloneRefusal');
+}
+
+describe('takeSnapshot', () => {
+  it('snapshots a stopped database into a private 0700 directory and records its sha256', async () => {
+    const livePath = liveSqlite(dir, ROWS);
+    const snapshot = await takeSnapshot({ livePath, writersStopped: true });
+    try {
+      expect(snapshot.sha256).toBe(createHash('sha256').update(readFileSync(snapshot.path)).digest('hex'));
+      expect(statSync(dirname(snapshot.path)).mode & 0o777).toBe(0o700);
+      expect(snapshot.bytes).toBe(statSync(snapshot.path).size);
+      expect(snapshot.liveBefore).toEqual(snapshot.liveAfter);
+      expect(snapshot.liveBefore.main?.size).toBeGreaterThan(0n);
+      expect(snapshot.liveBefore.wal).toBeNull();
+    } finally {
+      snapshot.dispose();
+    }
+    expect(existsSync(dirname(snapshot.path))).toBe(false);
+    snapshot.dispose(); // idempotent
+  });
+
+  it('refuses without writersStopped: true, before reading anything', async () => {
+    const livePath = liveSqlite(dir, ROWS);
+    let called = false;
+    const createSnapshotFile = (): void => void (called = true);
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: false, createSnapshotFile }))).toEqual({ code: 'writers-not-stopped' });
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: undefined as unknown as boolean, createSnapshotFile }))).toEqual({ code: 'writers-not-stopped' });
+    expect(called).toBe(false);
+  });
+
+  it('refuses a live file that does not exist', async () => {
+    expect(await refusalOf(() => takeSnapshot({ livePath: `${dir}/nope.db`, writersStopped: true }))).toEqual({ code: 'live-database-missing' });
+  });
+
+  /** A seam that copies for real, then lets the test act as the "concurrent writer" and returns where the copy went. */
+  function seam(afterCopy: (live: string) => void): { createSnapshotFile(source: string, destination: string): void; destination: () => string } {
+    let where = '';
+    return {
+      createSnapshotFile(source, destination) {
+        where = destination;
+        createSqliteSnapshot({ sourcePath: source, destPath: destination });
+        afterCopy(source);
+      },
+      destination: () => where,
+    };
+  }
+
+  it('refuses when the live main file changes while the snapshot runs, and removes the copy', async () => {
+    const livePath = liveSqlite(dir, ROWS);
+    const racing = seam((live) => appendFileSync(live, Buffer.alloc(4096)));
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: racing.createSnapshotFile }))).toEqual({ code: 'live-changed-during-snapshot' });
+    expect(existsSync(dirname(racing.destination()))).toBe(false);
+  });
+
+  it('refuses when only the mtime of the live file changes (same size)', async () => {
+    const livePath = liveSqlite(dir, ROWS);
+    const racing = seam((live) => {
+      const fd = openSync(live, 'r+');
+      writeSync(fd, readFileSync(live).subarray(0, 1), 0, 1, 0); // rewrite the first byte unchanged
+      closeSync(fd);
+    });
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: racing.createSnapshotFile }))).toEqual({ code: 'live-changed-during-snapshot' });
+  });
+
+  it('refuses when a -wal or -shm sidecar appears while the snapshot runs', async () => {
+    for (const sidecar of ['-wal', '-shm']) {
+      const livePath = liveSqlite(dir, ROWS);
+      const racing = seam((live) => writeFileSync(`${live}${sidecar}`, 'x'));
+      expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: racing.createSnapshotFile })), sidecar).toEqual({ code: 'live-changed-during-snapshot' });
+    }
+  });
+
+  it('refuses when a -wal sidecar changes size while the snapshot runs', async () => {
+    const livePath = liveSqlite(dir, ROWS);
+    writeFileSync(`${livePath}-wal`, '');
+    const racing = seam((live) => appendFileSync(`${live}-wal`, 'x'));
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: racing.createSnapshotFile }))).toEqual({ code: 'live-changed-during-snapshot' });
+  });
+
+  it('refuses a UTF-16 database', async () => {
+    const livePath = liveSqlite(dir, ['create table items(id integer primary key, name text)', "insert into items values (1, 'a')"], ["encoding = 'UTF-16le'"]);
+    const refusal = await refusalOf(() => takeSnapshot({ livePath, writersStopped: true }));
+    expect(refusal).toEqual({ code: 'snapshot-not-utf8' });
+  });
+
+  it('refuses a snapshot that fails integrity_check', async () => {
+    const livePath = liveSqlite(dir, ['create table items(id integer primary key, name text)', 'create index by_name on items(name)', "with recursive n(i) as (select 1 union all select i + 1 from n where i < 2000) insert into items select i, 'name' || i from n"]);
+    const corrupting = seam(() => undefined);
+    const corrupt = (source: string, destination: string): void => {
+      corrupting.createSnapshotFile(source, destination);
+      const fd = openSync(destination, 'r+');
+      writeSync(fd, Buffer.alloc(2048, 0xff), 0, 2048, 4096 * 2); // trash an index/table page
+      closeSync(fd);
+    };
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: corrupt }))).toEqual({ code: 'snapshot-integrity-failed' });
+    expect(existsSync(dirname(corrupting.destination()))).toBe(false);
+  });
+
+  it('refuses a snapshot whose integrity_check reports a problem without throwing (an orphaned index page)', async () => {
+    const livePath = liveSqlite(dir, ['create table items(id integer primary key, name text)', 'create index by_name on items(name)', "insert into items values (1, 'a'), (2, 'b')"]);
+    execFileSync('sqlite3', [livePath, '.dbconfig defensive off', "pragma writable_schema = on; delete from sqlite_master where type = 'index' and name = 'by_name';"]);
+    // db-backup's own check already throws on this file; a plain copy isolates clone's second check.
+    const plainCopy = (source: string, destination: string): void => copyFileSync(source, destination);
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: plainCopy }))).toEqual({ code: 'snapshot-integrity-failed' });
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true }))).toEqual({ code: 'snapshot-failed' });
+  });
+
+  it('refuses a snapshot whose foreign_key_check finds an orphan, naming the table', async () => {
+    const livePath = liveSqlite(dir, [
+      'create table parent(id integer primary key)',
+      'create table child(id integer primary key, parent_id integer references parent(id))',
+      'insert into child values (1, 99)',
+    ], ['foreign_keys = off']);
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true }))).toEqual({ code: 'snapshot-foreign-key-violation', table: 'child' });
+  });
+
+  it('removes its temp directory when the snapshot primitive throws', async () => {
+    const livePath = liveSqlite(dir, ROWS);
+    let where = '';
+    const failing = (_source: string, destination: string): void => {
+      where = destination;
+      throw new Error('sqlite3 exploded: /secret/path');
+    };
+    const refusal = await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: failing }));
+    expect(refusal).toEqual({ code: 'snapshot-failed' });
+    expect(existsSync(dirname(where))).toBe(false);
+  });
+});
