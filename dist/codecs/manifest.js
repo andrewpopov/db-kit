@@ -56,9 +56,21 @@ export const TableSpecSchema = z
             ctx.addIssue({ code: 'custom', message: `primaryKey column "${name}" must not be nullable`, path: ['primaryKey'] });
     }
 });
-export const CodecManifestSchema = z.strictObject({
+/** A table that exists (or may exist) but is never copied or verified: a migration ledger, a derived search table. Still declared, so an UNDECLARED table stays an error. */
+export const SkippedTableSchema = z.strictObject({ copy: z.literal(false), reason: z.string().min(1, 'a skipped table needs a reason') });
+const RawManifestSchema = z.strictObject({
     version: z.literal(1),
-    tables: ownRecord(TableSpecSchema),
+    tables: ownRecord(z.union([SkippedTableSchema, TableSpecSchema])),
+});
+/** `tables` holds the copied tables; a `{ copy: false, reason }` entry moves to `skipped`. */
+export const CodecManifestSchema = RawManifestSchema.transform((raw) => {
+    const tables = {};
+    const skipped = {};
+    for (const [name, entry] of Object.entries(raw.tables)) {
+        const target = 'copy' in entry ? skipped : tables;
+        Object.defineProperty(target, name, { value: 'copy' in entry ? { reason: entry.reason } : entry, enumerable: true, writable: true, configurable: true });
+    }
+    return { version: raw.version, tables, skipped };
 });
 /** Validate and normalise a manifest. Throws `DbKitError('INVALID_MANIFEST')`; the message never quotes a value. */
 export function parseCodecManifest(input) {

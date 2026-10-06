@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs';
 import type { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CodecManifestInput } from '../codecs/manifest.js';
+import type { CodecManifestInput, TableInput } from '../codecs/manifest.js';
 import { liveSqlite, manifestOf, scratchDir, targetDatabase, type TargetDatabase } from '../test-support/clone-fixture.js';
 import { startThrowawayPostgres, type ThrowawayPostgres } from '../test-support/embedded-pg.js';
 import { CloneRefusal, type Refusal } from './errors.js';
@@ -23,10 +23,11 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 }, 60_000);
 
-type Columns = CodecManifestInput['tables'][string]['columns'];
+type Columns = TableInput['columns'];
 const int = { codec: 'integer', nullable: false } as const;
+const nullableInt = { codec: 'integer', nullable: true } as const;
 const text = { codec: 'text', nullable: false } as const;
-const table = (columns: Columns, primaryKey: string[] = ['id']): CodecManifestInput['tables'][string] => ({ columns, primaryKey });
+const table = (columns: Columns, primaryKey: string[] = ['id']): TableInput => ({ columns, primaryKey });
 
 const ITEMS = manifestOf({ version: 1, tables: { items: table({ id: int, name: text }) } });
 const ITEMS_DDL = ['create table items(id bigint primary key, name text not null)'];
@@ -196,6 +197,30 @@ const CASES: RefusalCase[] = [
     expected: [{ code: 'volatile-expression', table: 'items', object: 'posd' }],
   },
   { name: 'an immutable CHECK is fine', ddl: ['create table items(id bigint primary key, name text not null check (length(name) > 0))'], expected: [] },
+  {
+    name: 'a copy:false ledger table that holds rows (declared, so not undeclared; never counted, truncated or copied)',
+    ddl: [...ITEMS_DDL, 'create table _ledger(id bigint primary key, note text)', "insert into _ledger values (1, 'applied')"],
+    manifest: manifestOf({ version: 1, tables: { items: table({ id: int, name: text }), _ledger: { copy: false, reason: 'migration ledger' } } }),
+    expected: [],
+  },
+  {
+    name: 'the same ledger table UNDECLARED (the undeclared-table check stays strict)',
+    ddl: [...ITEMS_DDL, 'create table _ledger(id bigint primary key, note text)'],
+    expected: [{ code: 'manifest-invalid', table: '_ledger', object: 'postgres:undeclared-table' }],
+  },
+  {
+    name: 'a foreign key from a copied table to a copy:false table',
+    ddl: ['create table _ledger(id bigint primary key)', 'create table items(id bigint primary key, name text not null, ledger_id bigint references _ledger(id))'],
+    manifest: manifestOf({ version: 1, tables: { items: table({ id: int, name: text, ledger_id: nullableInt }), _ledger: { copy: false, reason: 'ledger' } } }),
+    live: liveSqlite(dir, ['create table items(id integer primary key, name text not null, ledger_id integer)']),
+    expected: [{ code: 'foreign-key-to-skipped-table', table: 'items', object: 'items_ledger_id_fkey' }],
+  },
+  {
+    name: 'a foreign key from a copy:false table to a copied table',
+    ddl: [...ITEMS_DDL, 'create table _ledger(id bigint primary key, item_id bigint references items(id))'],
+    manifest: manifestOf({ version: 1, tables: { items: table({ id: int, name: text }), _ledger: { copy: false, reason: 'ledger' } } }),
+    expected: [{ code: 'foreign-key-to-skipped-table', table: 'items', object: '_ledger_item_id_fkey' }],
+  },
   // emptiness
   { name: 'a non-empty table', ddl: [...ITEMS_DDL, "insert into items values (9, 'x')"], expected: [{ code: 'target-not-empty', table: 'items' }] },
   // the receipt table

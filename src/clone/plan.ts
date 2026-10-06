@@ -9,7 +9,8 @@ import type { PostgresConfig } from '../url.js';
 import { readIdentity, readTargetFacts, TARGET_SCHEMA, type ForeignKeyFact, type TargetIdentityFacts } from './catalog.js';
 import { CloneRefusal, refuse, toRefusal, type Refusal } from './errors.js';
 import { DEFAULT_MAX_SLOT_RETENTION_BYTES, evaluateGate } from './rules.js';
-import { openSnapshot, readSequenceSource, restartValue, scanSource, type SourceFacts, type SourceTableFacts } from './source.js';
+import { nonNegativeBigint } from './options.js';
+import { openSnapshot, readSequenceSource, restartValue, scanSource, sqliteSkippedKeyRefusals, type SourceFacts, type SourceTableFacts } from './source.js';
 import { takeSnapshot, type Snapshot, type SnapshotOptions } from './snapshot.js';
 import { isProduction, productionConfirmation, type TopologyEntry } from './topology.js';
 
@@ -60,6 +61,8 @@ export interface ClonePlan {
   snapshot: { sha256: string; bytes: number };
   target: TargetSummary | null;
   tables: PlannedTable[];
+  /** Tables declared `copy: false`: never copied, verified, emptied or truncated. */
+  skippedTables: { table: string; reason: string }[];
   /** Foreign keys owned by copied tables: dropped before the load and re-added (re-validated) before COMMIT. */
   foreignKeys: ForeignKeyFact[];
   /** Foreign keys from tables clone does not copy into copied ones: untouched, listed for the operator. */
@@ -75,6 +78,7 @@ export interface ClonePlan {
  * removed on every path.
  */
 export async function planClone(options: PlanOptions): Promise<ClonePlan> {
+  nonNegativeBigint('maxSlotRetentionBytes', options.maxSlotRetentionBytes);
   const snapshot = await takeSnapshot(options);
   try {
     return await planFromSnapshot(snapshot, options);
@@ -102,6 +106,7 @@ async function buildPlan(snapshot: Snapshot, options: PlanOptions): Promise<Clon
     try {
       await client.query('BEGIN READ ONLY');
       await client.query("SELECT pg_catalog.set_config('search_path', '', true)");
+      await pinSession(client);
       return (await inspectTarget(client, context, plan)).plan;
     } finally {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -113,7 +118,7 @@ async function buildPlan(snapshot: Snapshot, options: PlanOptions): Promise<Clon
 }
 
 export function emptyPlan(snapshot: Pick<Snapshot, 'sha256' | 'bytes'>): ClonePlan {
-  return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
+  return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], skippedTables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
 }
 
 /** The snapshot side of a plan: its schema and the one-scan source facts. Shared by planning and execution. */
@@ -126,7 +131,9 @@ export interface SourceContext {
 
 export function prepareSource(db: Database.Database, options: PlanOptions): SourceContext {
   const sqliteSchema = introspectSqlite(db);
-  return { db, options, sqliteSchema, source: scanSource(db, options.manifest, sqliteSchema) };
+  const source = scanSource(db, options.manifest, sqliteSchema);
+  source.refusals.push(...sqliteSkippedKeyRefusals(db, options.manifest, sqliteSchema));
+  return { db, options, sqliteSchema, source };
 }
 
 export interface TargetInspection {
@@ -142,6 +149,7 @@ export interface TargetInspection {
 export async function inspectTarget(client: Client, context: SourceContext, plan: ClonePlan): Promise<TargetInspection> {
   const { options, db, sqliteSchema, source } = context;
   const { manifest } = options;
+  plan.skippedTables = Object.entries(manifest.skipped).map(([table, { reason }]) => ({ table, reason }));
   let identity: TargetIdentityFacts;
   try {
     identity = await readIdentity(client);
@@ -182,8 +190,18 @@ export async function inspectTarget(client: Client, context: SourceContext, plan
   return finish();
 }
 
+/**
+ * Pin what the codecs read, inside the transaction as well as in the connection's startup options (a pooler may drop
+ * the latter): hex bytea, and lossless float text. A role or database default of `bytea_output=escape` or
+ * `extra_float_digits=0` would otherwise change what both sides of a verification read.
+ */
+export async function pinSession(client: Client): Promise<void> {
+  await client.query("SET LOCAL bytea_output = 'hex'");
+  await client.query('SET LOCAL extra_float_digits = 3');
+}
+
 /** Connect one `pg.Client` with a pinned UTC/ISO session (the codecs' read contract). Failure is a typed refusal. */
-export async function connectClient(options: PlanOptions, statementTimeoutMs: number): Promise<Client> {
+export async function connectClient(options: Pick<PlanOptions, 'target' | 'tlsCa' | 'wrapClient'>, statementTimeoutMs: number): Promise<Client> {
   const direct = new Client({
     ...postgresConnectionOptions(options.target, { applicationName: 'db-kit-clone', statementTimeoutMs, tlsCa: options.tlsCa, codecSession: true }),
     types: POSTGRES_CODEC_TYPES,

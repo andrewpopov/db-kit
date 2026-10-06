@@ -70,6 +70,27 @@ function invalidUtf8Columns(db, table, columns) {
     }
     return text.flatMap(([name], i) => (bad.has(i) ? [name] : []));
 }
+/**
+ * Foreign keys the SQLite schema itself declares between a copied table and a `copy: false` one, in either direction:
+ * Postgres may not have that key, but the relationship would still dangle once one side is never copied.
+ */
+export function sqliteSkippedKeyRefusals(db, manifest, schema) {
+    const refusals = [];
+    const keys = db.prepare('select "table" as ref from pragma_foreign_key_list(?)').safeIntegers(false);
+    for (const name of schema.keys()) {
+        const copied = Object.hasOwn(manifest.tables, name);
+        const skipped = Object.hasOwn(manifest.skipped, name);
+        if (!copied && !skipped)
+            continue;
+        for (const { ref } of keys.all(name)) {
+            if (copied && Object.hasOwn(manifest.skipped, ref))
+                refusals.push({ code: 'foreign-key-to-skipped-table', table: name, object: `${name}->${ref}` });
+            if (skipped && Object.hasOwn(manifest.tables, ref))
+                refusals.push({ code: 'foreign-key-to-skipped-table', table: ref, object: `${name}->${ref}` });
+        }
+    }
+    return refusals;
+}
 function asBigInt(value, table, column) {
     if (value === null || value === undefined)
         return null;

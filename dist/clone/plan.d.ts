@@ -54,6 +54,11 @@ export interface ClonePlan {
     };
     target: TargetSummary | null;
     tables: PlannedTable[];
+    /** Tables declared `copy: false`: never copied, verified, emptied or truncated. */
+    skippedTables: {
+        table: string;
+        reason: string;
+    }[];
     /** Foreign keys owned by copied tables: dropped before the load and re-added (re-validated) before COMMIT. */
     foreignKeys: ForeignKeyFact[];
     /** Foreign keys from tables clone does not copy into copied ones: untouched, listed for the operator. */
@@ -89,5 +94,11 @@ export interface TargetInspection {
  * in a READ ONLY transaction; execution re-runs it under the table locks, where it is authoritative.
  */
 export declare function inspectTarget(client: Client, context: SourceContext, plan: ClonePlan): Promise<TargetInspection>;
+/**
+ * Pin what the codecs read, inside the transaction as well as in the connection's startup options (a pooler may drop
+ * the latter): hex bytea, and lossless float text. A role or database default of `bytea_output=escape` or
+ * `extra_float_digits=0` would otherwise change what both sides of a verification read.
+ */
+export declare function pinSession(client: Client): Promise<void>;
 /** Connect one `pg.Client` with a pinned UTC/ISO session (the codecs' read contract). Failure is a typed refusal. */
-export declare function connectClient(options: PlanOptions, statementTimeoutMs: number): Promise<Client>;
+export declare function connectClient(options: Pick<PlanOptions, 'target' | 'tlsCa' | 'wrapClient'>, statementTimeoutMs: number): Promise<Client>;

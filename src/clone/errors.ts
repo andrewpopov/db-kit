@@ -51,6 +51,7 @@ export const CLONE_REFUSAL_CODES = [
   'sequence-cycles',
   'sequence-out-of-range',
   'incoming-reference-from-uncopied-table',
+  'foreign-key-to-skipped-table',
   // capabilities
   'not-owner',
   'no-create-privilege',
@@ -60,6 +61,20 @@ export const CLONE_REFUSAL_CODES = [
   'archiver-failing',
   'replication-slot-lag',
   'preflight-failed',
+  // reverse clone (Postgres to SQLite)
+  'source-url-missing',
+  'source-url-invalid',
+  'source-not-postgres',
+  'source-in-recovery',
+  'sqlite-target-exists',
+  'sqlite-template-missing',
+  'sqlite-template-invalid',
+  'sqlite-template-not-empty',
+  'sqlite-foreign-key-violation',
+  'sqlite-integrity-failed',
+  'sqlite-write-failed',
+  'invalid-option',
+  'unexpected-value-format',
   // execution
   'lock-timeout',
   'load-failed',

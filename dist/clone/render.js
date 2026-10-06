@@ -17,6 +17,8 @@ export function planToText(plan) {
         const state = table.willTruncate ? ' WILL TRUNCATE' : table.targetNonEmpty ? ' target NOT EMPTY' : '';
         lines.push(`  ${table.table}: ${table.rows} rows, ~${table.estimatedBytes} bytes${state}`);
     }
+    for (const skipped of plan.skippedTables)
+        lines.push(`  ${skipped.table}: SKIPPED (${skipped.reason})`);
     lines.push(`foreign keys dropped and re-added (${plan.foreignKeys.length}):`);
     for (const fk of plan.foreignKeys)
         lines.push(`  ${fk.tableSchema}.${fk.table} ${fk.name}: ${fk.definition}`);
@@ -45,5 +47,16 @@ export function resultToText(result) {
     lines.push(`total ${result.totals.rows} rows in ${result.totals.seconds.toFixed(1)}s`);
     if (result.commit)
         lines.push(`transaction ${result.commit.transactionId}${result.commit.acknowledged ? '' : ' (COMMIT reply was lost; confirmed through txid_status)'}`);
+    return lines.join('\n');
+}
+export function reverseToText(result) {
+    const lines = [result.outcome === 'written' ? `WRITTEN ${result.path} (run ${result.runId})` : `DRY RUN (nothing written) run ${result.runId}`];
+    for (const table of result.tables)
+        lines.push(`  ${table.table}: ${table.rows} rows, load ${table.loadSeconds.toFixed(1)}s, verify ${table.verifySeconds.toFixed(1)}s, sha256 ${table.sha256}`);
+    for (const sequence of result.sequences)
+        lines.push(`  sqlite_sequence ${sequence.table} = ${sequence.seq}`);
+    lines.push(`total ${result.totals.rows} rows in ${result.totals.seconds.toFixed(1)}s`);
+    if (result.receiptPath)
+        lines.push(`receipt ${result.receiptPath}`);
     return lines.join('\n');
 }

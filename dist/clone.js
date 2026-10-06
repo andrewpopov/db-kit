@@ -1,4 +1,4 @@
-export { runCloneCli, TARGET_URL_ENV } from './clone/cli.js';
+export { runCloneCli, SOURCE_URL_ENV, TARGET_URL_ENV } from './clone/cli.js';
 export { CLONE_REFUSAL_CODES, CloneOutcomeError, CloneRefusal, describeRefusal } from './clone/errors.js';
 export { planClone, planFromSnapshot } from './clone/plan.js';
 export { planToJson, planToText } from './clone/render.js';
@@ -6,3 +6,5 @@ export { takeSnapshot } from './clone/snapshot.js';
 export { isProduction, loadTopology, productionConfirmation } from './clone/topology.js';
 export { executeClone } from './clone/execute.js';
 export { resultToJson, resultToText } from './clone/render.js';
+export { reverseClone } from './clone/reverse.js';
+export { reverseToText } from './clone/render.js';

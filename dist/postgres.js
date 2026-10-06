@@ -39,7 +39,7 @@ export function postgresConnectionOptions(config, settings) {
         password: config.password,
         ssl: tlsFor(config.sslmode, settings.tlsCa),
         application_name: settings.applicationName,
-        options: `-c statement_timeout=${settings.statementTimeoutMs}${settings.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD' : ''}`,
+        options: `-c statement_timeout=${settings.statementTimeoutMs}${settings.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD -c bytea_output=hex -c extra_float_digits=3' : ''}`,
     };
 }
 /**

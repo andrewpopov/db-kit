@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3';
-import { type Client } from 'pg';
+import { type Client, type CustomTypesConfig } from 'pg';
 import type { ColumnCodec } from '../codecs/bound.js';
 import type { Dialect } from '../codecs/implementations.js';
+export declare const VERIFY_TYPES: CustomTypesConfig;
 /**
  * Versioned, type-tagged, length-prefixed row encoding of the codecs' canonical forms: per column a tag byte (0 NULL,
  * 1 value) and, for a value, a 4-byte big-endian byte length and the UTF-8 canonical string. The framing makes

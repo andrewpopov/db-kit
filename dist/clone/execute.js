@@ -4,9 +4,10 @@ import { buildCodecs } from '../codecs/bound.js';
 import { quoteIdent, readForeignKeys, readIdentity, readReceiptFacts, RECEIPT_COLUMNS, RECEIPT_SCHEMA, RECEIPT_TABLE, TARGET_SCHEMA, } from './catalog.js';
 import { CloneOutcomeError, CloneRefusal, refuse, toRefusal } from './errors.js';
 import { loadTable } from './load.js';
+import { nonNegativeBigint, nonNegativeNumber, positiveInteger } from './options.js';
 import { receiptIsSound } from './rules.js';
 import { postgresOrderBy, sqliteOrderBy } from './order.js';
-import { connectClient, emptyPlan, inspectTarget, prepareSource } from './plan.js';
+import { connectClient, emptyPlan, inspectTarget, pinSession, prepareSource } from './plan.js';
 import { openSnapshot } from './source.js';
 import { takeSnapshot } from './snapshot.js';
 import { verifyTable } from './verify.js';
@@ -20,6 +21,11 @@ const seconds = (since) => (performance.now() - since) / 1000;
  * allowlist; the snapshot is removed on every path.
  */
 export async function executeClone(options) {
+    positiveInteger('fetchRows', options.fetchRows);
+    positiveInteger('batchBytes', options.batchBytes);
+    positiveInteger('lockTimeoutMs', options.lockTimeoutMs);
+    nonNegativeNumber('commitPollMs', options.commitPollMs);
+    nonNegativeBigint('maxSlotRetentionBytes', options.maxSlotRetentionBytes);
     const snapshot = await takeSnapshot(options);
     let result;
     let failure;
@@ -68,6 +74,7 @@ async function executeFromSnapshot(snapshot, options) {
         await client.query('SET LOCAL statement_timeout = 0');
         await client.query("SELECT pg_catalog.set_config('search_path', '', true)");
         await client.query('SET LOCAL row_security = off');
+        await pinSession(client);
         const copiedOids = await lockTables(client, Object.keys(manifest.tables));
         const { plan, identity } = await inspectTarget(client, context, plan0);
         if (!plan.ok)

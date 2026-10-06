@@ -12,7 +12,7 @@ export interface PostgresOptions {
   /** Max connections in the pool. Default 10. */
   poolSize?: number;
   /**
-   * Pin `TimeZone=UTC` and `DateStyle=ISO, YMD` on every connection (startup options). Required when reading with
+   * Pin `TimeZone=UTC`, `DateStyle=ISO, YMD`, `bytea_output=hex` and `extra_float_digits=3` (lossless float text) on every connection (startup options). Required when reading with
    * the codecs' `POSTGRES_CODEC_TYPES`: their timestamp text is whatever the session prints. Default false.
    */
   codecSession?: boolean;
@@ -83,7 +83,7 @@ export function postgresConnectionOptions(config: PostgresConfig, settings: Post
     password: config.password,
     ssl: tlsFor(config.sslmode, settings.tlsCa),
     application_name: settings.applicationName,
-    options: `-c statement_timeout=${settings.statementTimeoutMs}${settings.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD' : ''}`,
+    options: `-c statement_timeout=${settings.statementTimeoutMs}${settings.codecSession ? ' -c TimeZone=UTC -c DateStyle=ISO,YMD -c bytea_output=hex -c extra_float_digits=3' : ''}`,
   };
 }
 

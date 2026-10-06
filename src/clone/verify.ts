@@ -4,7 +4,7 @@ import { types as pgTypes, type Client, type CustomTypesConfig } from 'pg';
 import type { ColumnCodec } from '../codecs/bound.js';
 import type { Dialect } from '../codecs/implementations.js';
 import { quoteIdent, TARGET_SCHEMA } from './catalog.js';
-import { refuse } from './errors.js';
+import { CloneRefusal, refuse } from './errors.js';
 import { decodeSourceRow, sourceColumn, textPositions } from './text-read.js';
 
 /**
@@ -12,15 +12,21 @@ import { decodeSourceRow, sourceColumn, textPositions } from './text-read.js';
  * (a lowercasing TEXT parser, a Date parser) would otherwise decide what the target "says". timestamptz and json/jsonb
  * stay raw text, int8 and numeric stay strings (the codecs' contract); an unlisted type arrives as its text.
  */
+/** Hex output only: any other format (`bytea_output=escape`) would otherwise decode to an empty or wrong blob and verify against it. */
+function parseHexBytea(text: string): Buffer {
+  if (!/^\\x(?:[0-9a-fA-F]{2})*$/.test(text)) throw new CloneRefusal({ code: 'unexpected-value-format' });
+  return Buffer.from(text.slice(2), 'hex');
+}
+
 const FIXED_PARSERS = new Map<number, (text: string) => unknown>([
   [pgTypes.builtins.INT2, (text) => Number.parseInt(text, 10)],
   [pgTypes.builtins.INT4, (text) => Number.parseInt(text, 10)],
   [pgTypes.builtins.FLOAT4, Number.parseFloat],
   [pgTypes.builtins.FLOAT8, Number.parseFloat],
   [pgTypes.builtins.BOOL, (text) => text === 't'],
-  [pgTypes.builtins.BYTEA, (text) => Buffer.from(text.slice(2), 'hex')],
+  [pgTypes.builtins.BYTEA, parseHexBytea],
 ]);
-const VERIFY_TYPES: CustomTypesConfig = { getTypeParser: (oid: number) => FIXED_PARSERS.get(oid) ?? ((text: string) => text) } as CustomTypesConfig;
+export const VERIFY_TYPES: CustomTypesConfig = { getTypeParser: (oid: number) => FIXED_PARSERS.get(oid) ?? ((text: string) => text) } as CustomTypesConfig;
 
 const HEADER = Buffer.from('db-kit clone row encoding v1\0');
 const NULL_MARK = Buffer.from([0]);

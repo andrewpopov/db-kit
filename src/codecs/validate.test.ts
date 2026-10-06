@@ -6,10 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openPostgres, type PostgresHandle } from '../postgres.js';
 import { startThrowawayPostgres, type ThrowawayPostgres } from '../test-support/embedded-pg.js';
 import { introspectPostgres, introspectSqlite } from './introspect.js';
-import { parseCodecManifest, type CodecManifestInput } from './manifest.js';
+import { parseCodecManifest, type CodecManifestInput, type TableInput } from './manifest.js';
 import { validateManifest, type IntrospectedDatabases, type ManifestIssue } from './validate.js';
 
-type Columns = CodecManifestInput['tables'][string]['columns'];
+type Columns = TableInput['columns'];
 
 const GOOD_COLUMNS = {
   id: { codec: 'integer', nullable: false },

@@ -14,7 +14,7 @@ export function validateManifest(manifest, databases) {
     };
     for (const side of SIDES) {
         for (const table of databases[side].keys()) {
-            if (!Object.hasOwn(manifest.tables, table))
+            if (!Object.hasOwn(manifest.tables, table) && !Object.hasOwn(manifest.skipped, table))
                 issue('undeclared-table', side, table, undefined, `${side} table ${table} is not declared in the manifest`);
         }
     }
