@@ -141,6 +141,17 @@ describe('takeSnapshot', () => {
     expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true }))).toEqual({ code: 'snapshot-foreign-key-violation', table: 'child' });
   });
 
+  it('maps an unexpected filesystem error (the snapshot vanishes before it is hashed) onto the allowlist', async () => {
+    const livePath = liveSqlite(dir, ROWS);
+    const vanishing = seam(() => undefined);
+    const vanish = (source: string, destination: string): void => {
+      vanishing.createSnapshotFile(source, destination);
+      rmSync(destination);
+    };
+    expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: vanish }))).toEqual({ code: 'snapshot-failed' });
+    expect(existsSync(dirname(vanishing.destination()))).toBe(false);
+  });
+
   it('removes its temp directory when the snapshot primitive throws', async () => {
     const livePath = liveSqlite(dir, ROWS);
     let where = '';
@@ -190,22 +201,50 @@ describe('live databases in WAL mode', () => {
     }
   });
 
-  it('refuses a writer that commits while the snapshot runs', async () => {
-    const livePath = stoppedWithWal();
-    const racing = seam((live) => {
-      const writer = new Database(live);
-      writer.pragma('wal_autocheckpoint = 0');
-      writer.exec("insert into items values (99, 'late')");
-      writer.pragma('journal_mode'); // keep the connection's -wal frames on disk until after the stamp
-      lateWriter = writer;
+  for (const mode of ['delete', 'wal'] as const) {
+    const fresh = (): string => liveSqlite(dir, ['create table items(id integer primary key, name text not null)', "insert into items values (1, 'a'), (2, 'b')"], [`journal_mode = ${mode}`]);
+
+    it(`holds the write lock for the whole snapshot (${mode} mode): a competing writer is refused, db-backup still reads`, async () => {
+      const livePath = fresh();
+      const probes: string[] = [];
+      const probing = seam((live) => {
+        const rival = new Database(live, { timeout: 0 });
+        try {
+          rival.exec("begin immediate; update items set name = 'late' where id = 1; commit");
+          probes.push('committed');
+        } catch (error) {
+          probes.push((error as { code?: string }).code ?? 'other');
+        } finally {
+          rival.close();
+        }
+      });
+      const snapshot = await takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: probing.createSnapshotFile });
+      try {
+        expect(probes).toEqual(['SQLITE_BUSY']);
+        expect(rowsIn(snapshot.path)).toBe(2);
+      } finally {
+        snapshot.dispose();
+      }
+      // the hold is released afterwards
+      const after = new Database(livePath, { timeout: 0 });
+      after.exec("begin immediate; update items set name = 'ok' where id = 1; commit");
+      after.close();
     });
-    let lateWriter: Database.Database | undefined;
-    try {
-      expect(await refusalOf(() => takeSnapshot({ livePath, writersStopped: true, createSnapshotFile: racing.createSnapshotFile }))).toEqual({ code: 'live-changed-during-snapshot' });
-    } finally {
-      lateWriter?.close();
-    }
-  });
+
+    it(`refuses a writer that is already inside BEGIN IMMEDIATE (${mode} mode)`, async () => {
+      const livePath = fresh();
+      const writer = new Database(livePath);
+      writer.exec("begin immediate; update items set name = 'pending' where id = 1");
+      try {
+        const refusal = await refusalOf(() => takeSnapshot({ livePath, writersStopped: true }));
+        expect(refusal.code).toBe(mode === 'delete' ? 'live-writer-active' : refusal.code);
+        expect(['live-writer-active', 'live-checkpoint-blocked']).toContain(refusal.code);
+      } finally {
+        writer.exec('rollback');
+        writer.close();
+      }
+    });
+  }
 
   it('refuses by name when a held read transaction blocks the checkpoint', async () => {
     const source = liveSqlite(dir, ['create table items(id integer primary key, name text not null)', "insert into items values (1, 'a')"], ['journal_mode = wal']);

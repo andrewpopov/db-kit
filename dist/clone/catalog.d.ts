@@ -72,6 +72,8 @@ export interface SequenceRef {
 }
 export interface ReceiptFacts {
     schemaExists: boolean;
+    /** Publications that already include, or would automatically adopt, `db_kit.clone_receipt`: FOR ALL TABLES or FOR TABLES IN SCHEMA db_kit. */
+    adoptingPublications: string[];
     /** Null when `db_kit.clone_receipt` does not exist. */
     table: null | {
         kind: string;
@@ -105,6 +107,12 @@ export interface TargetFacts {
     }[];
     subscriptionCount: number;
     sequenceRefs: SequenceRef[];
+    /** Column defaults anywhere in the database that call nextval() without a resolvable sequence dependency (a text or computed argument). */
+    dynamicSequenceDefaults: {
+        schema: string;
+        table: string;
+        column: string;
+    }[];
     receipt: ReceiptFacts;
     nonEmptyTables: string[];
     archiverFailedRecently: boolean;

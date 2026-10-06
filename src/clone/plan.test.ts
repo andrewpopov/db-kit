@@ -5,7 +5,8 @@ import type { CodecManifestInput } from '../codecs/manifest.js';
 import { liveSqlite, manifestOf, scratchDir, targetDatabase, type TargetDatabase } from '../test-support/clone-fixture.js';
 import { startThrowawayPostgres, type ThrowawayPostgres } from '../test-support/embedded-pg.js';
 import { CloneRefusal, type Refusal } from './errors.js';
-import { planClone, type ClonePlan, type PlanOptions } from './plan.js';
+import { planClone, planFromSnapshot, type ClonePlan, type PlanOptions } from './plan.js';
+import { takeSnapshot } from './snapshot.js';
 import type { TopologyEntry } from './topology.js';
 
 let server: ThrowawayPostgres;
@@ -147,7 +148,6 @@ const CASES: RefusalCase[] = [
   // replication and DDL hooks
   { name: 'an event trigger', ddl: [...ITEMS_DDL, 'create function evt() returns event_trigger language plpgsql as $$ begin end $$', 'create event trigger e on ddl_command_start execute function evt()'], expected: [{ code: 'event-trigger-present', object: 'e' }] },
   { name: 'a publication naming the table', ddl: [...ITEMS_DDL, 'create publication pub for table items'], expected: [{ code: 'publication-covers-table', table: 'items', object: 'pub' }] },
-  { name: 'a FOR ALL TABLES publication', ddl: [...ITEMS_DDL, 'create publication pub_all for all tables'], expected: [{ code: 'publication-covers-table', table: 'items', object: 'pub_all' }] },
   { name: 'a subscription', ddl: [...ITEMS_DDL, "create subscription sub connection 'host=127.0.0.1 port=1 dbname=none' publication p with (connect = false)"], expected: [{ code: 'subscription-present' }] },
   // sequences
   { name: 'a sequence nobody owns', ddl: ['create sequence s1', "create table items(id bigint primary key default nextval('s1'), name text not null)"], expected: [{ code: 'sequence-unowned', table: 'items', column: 'id', object: 'public.s1' }] },
@@ -159,6 +159,23 @@ const CASES: RefusalCase[] = [
     expected: [{ code: 'sequence-shared', table: 'a', column: 'id', object: 'public.a_id_seq' }],
   },
   { name: 'a cycling sequence', ddl: SEQ_ITEMS('(cycle)'), expected: [{ code: 'sequence-cycles', table: 'items', column: 'id', object: 'public.items_id_seq' }] },
+  {
+    name: 'a late-bound nextval default in another schema on a copied sequence',
+    ddl: ['create table items(id bigserial primary key, name text not null)', 'create schema other', "create table other.orders(id bigint primary key default nextval('public.items_id_seq'::text))"],
+    expected: [{ code: 'sequence-dynamic-default', table: 'other.orders', column: 'id' }],
+  },
+  {
+    name: 'a regclass nextval default in another schema on a copied sequence',
+    ddl: ['create table items(id bigserial primary key, name text not null)', 'create schema other', "create table other.orders(id bigint primary key default nextval('public.items_id_seq'::regclass))"],
+    expected: [{ code: 'sequence-shared', table: 'items', column: 'id', object: 'public.items_id_seq' }],
+  },
+  { name: 'a schema publication that would adopt a future receipt table', ddl: [...ITEMS_DDL, 'create schema db_kit', 'create publication p_schema for tables in schema db_kit'], expected: [{ code: 'receipt-table-invalid', table: 'db_kit.clone_receipt', object: 'p_schema' }] },
+  { name: 'a FOR ALL TABLES publication also adopts a future receipt table', ddl: [...ITEMS_DDL, 'create publication p_all for all tables'], expected: [{ code: 'publication-covers-table', table: 'items', object: 'p_all' }, { code: 'receipt-table-invalid', table: 'db_kit.clone_receipt', object: 'p_all' }] },
+  {
+    name: 'an incoming NOT VALID foreign key from an uncopied table',
+    ddl: [...ITEMS_DDL, 'create schema other', 'create table other.child(item_id bigint)', 'insert into other.child values (5)', 'alter table other.child add constraint child_fk foreign key (item_id) references public.items(id) not valid'],
+    expected: [{ code: 'foreign-key-not-valid', table: 'other.child', object: 'child_fk' }],
+  },
   // emptiness
   { name: 'a non-empty table', ddl: [...ITEMS_DDL, "insert into items values (9, 'x')"], expected: [{ code: 'target-not-empty', table: 'items' }] },
   // the receipt table
@@ -371,6 +388,31 @@ describe('the plan itself', () => {
     expect(sequences.events).toMatchObject({ increment: 1n, restartWith: 6n }); // max(id) is 3, the AUTOINCREMENT high-water is 5
     expect(sequences.empty_seq).toMatchObject({ start: 7n, increment: 3n, restartWith: null });
     expect(plan.sequences).toHaveLength(3);
+  });
+});
+
+describe('the exported planning API never leaks a driver error', () => {
+  it('planFromSnapshot maps a raising RLS policy function to preflight-failed without its value', async () => {
+    const db = await create([
+      'create role rls_owner login password \'pw-rls\'',
+      ...ITEMS_DDL,
+      "insert into items values (1, 'x')",
+      "create function boom(i bigint) returns boolean language plpgsql as $$ begin raise exception 'leaked-value-%', i; end $$",
+      'alter table items owner to rls_owner',
+      'alter table items enable row level security',
+      'alter table items force row level security',
+      'create policy p on items using (boom(id))',
+      'grant create on database {db} to rls_owner',
+    ]);
+    const snapshot = await takeSnapshot({ livePath: ITEMS_LIVE, writersStopped: true });
+    try {
+      const error: unknown = await planFromSnapshot(snapshot, { livePath: ITEMS_LIVE, writersStopped: true, manifest: ITEMS, target: { ...db.config, user: 'rls_owner', password: 'pw-rls' }, confirmProduction: confirmationOf(db) }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(CloneRefusal);
+      expect((error as CloneRefusal).refusal).toEqual({ code: 'preflight-failed' });
+      expect(JSON.stringify(error) + (error as Error).message + (error as Error).stack).not.toContain('leaked-value');
+    } finally {
+      snapshot.dispose();
+    }
   });
 });
 

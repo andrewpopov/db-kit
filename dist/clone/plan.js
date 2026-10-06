@@ -19,14 +19,20 @@ export async function planClone(options) {
     try {
         return await planFromSnapshot(snapshot, options);
     }
-    catch (error) {
-        throw error instanceof CloneRefusal ? error : new CloneRefusal(toRefusal(error));
-    }
     finally {
         snapshot.dispose();
     }
 }
+/** Plan from an already-verified snapshot. Like `planClone`, nothing but a `CloneRefusal` ever leaves: driver errors are dropped. */
 export async function planFromSnapshot(snapshot, options) {
+    try {
+        return await buildPlan(snapshot, options);
+    }
+    catch (error) {
+        throw error instanceof CloneRefusal ? error : new CloneRefusal(toRefusal(error));
+    }
+}
+async function buildPlan(snapshot, options) {
     const { manifest } = options;
     const plan = {
         ok: false,

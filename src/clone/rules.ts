@@ -1,6 +1,8 @@
 import type { CodecManifest } from '../codecs/manifest.js';
-import { RECEIPT_COLUMNS, RECEIPT_PRIMARY_KEY, RECEIPT_SCHEMA, RECEIPT_TABLE, type ForeignKeyFact, type SequenceRef, type TargetFacts } from './catalog.js';
+import { RECEIPT_COLUMNS, RECEIPT_PRIMARY_KEY, RECEIPT_SCHEMA, RECEIPT_TABLE, TARGET_SCHEMA, type ForeignKeyFact, type SequenceRef, type TargetFacts } from './catalog.js';
 import type { Refusal } from './errors.js';
+
+const RECEIPT_REFUSAL = { code: 'receipt-table-invalid', table: `${RECEIPT_SCHEMA}.${RECEIPT_TABLE}` } as const;
 
 export const DEFAULT_MAX_SLOT_RETENTION_BYTES = 5n * 1024n ** 3n;
 
@@ -50,6 +52,9 @@ export function evaluateGate(facts: TargetFacts, manifest: CodecManifest, option
 
   const foreignKeys = facts.foreignKeys.filter((fk) => copied.has(fk.tableOid));
   const incomingReferences = facts.foreignKeys.filter((fk) => !copied.has(fk.tableOid));
+  for (const fk of incomingReferences) {
+    if (!fk.validated || !fk.enforced) refuse({ code: 'foreign-key-not-valid', table: `${fk.tableSchema}.${fk.table}`, object: fk.name });
+  }
   for (const fk of foreignKeys) {
     if (!fk.validated || !fk.enforced) refuse({ code: 'foreign-key-not-valid', table: fk.table, object: fk.name });
     if (fk.hasComment) refuse({ code: 'constraint-has-comment', table: fk.table, object: fk.name });
@@ -62,9 +67,13 @@ export function evaluateGate(facts: TargetFacts, manifest: CodecManifest, option
   for (const published of facts.publications) refuse({ code: 'publication-covers-table', table: published.table, object: published.publication });
   if (facts.subscriptionCount > 0) refuse({ code: 'subscription-present' });
 
+  for (const use of facts.dynamicSequenceDefaults) {
+    refuse({ code: 'sequence-dynamic-default', table: use.schema === TARGET_SCHEMA ? use.table : `${use.schema}.${use.table}`, column: use.column });
+  }
   const sequences = classifySequences(facts.sequenceRefs, copied, refuse);
 
   const { receipt } = facts;
+  for (const publication of receipt.adoptingPublications) refuse({ ...RECEIPT_REFUSAL, object: publication });
   if (receipt.table) {
     const columnsMatch = sameList(Object.keys(receipt.table.columns).sort(), Object.keys(RECEIPT_COLUMNS).sort()) && Object.entries(RECEIPT_COLUMNS).every(([name, type]) => receipt.table?.columns[name] === type);
     const sound =
@@ -76,7 +85,7 @@ export function evaluateGate(facts: TargetFacts, manifest: CodecManifest, option
       !receipt.table.published &&
       columnsMatch &&
       sameList(receipt.table.primaryKey, RECEIPT_PRIMARY_KEY);
-    if (!sound) refuse({ code: 'receipt-table-invalid', table: `${RECEIPT_SCHEMA}.${RECEIPT_TABLE}` });
+    if (!sound) refuse(RECEIPT_REFUSAL);
   } else if (!receipt.canCreate) {
     refuse({ code: 'no-create-privilege', object: RECEIPT_SCHEMA });
   }

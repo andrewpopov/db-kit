@@ -145,7 +145,17 @@ export async function readTargetFacts(client, tableNames, versionNum) {
         tableOid: row.table_oid,
         column: row.column,
     }));
-    const receipt = await readReceipt(q);
+    const dynamicSequenceDefaults = await q(`select n.nspname::text as schema, c.relname::text as table, a.attname::text as column
+       from pg_catalog.pg_attrdef ad
+       join pg_catalog.pg_class c on c.oid = ad.adrelid join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+       join pg_catalog.pg_attribute a on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+      where position('nextval(' in pg_catalog.lower(pg_catalog.pg_get_expr(ad.adbin, ad.adrelid))) > 0
+        and not exists (select 1 from pg_catalog.pg_depend dep
+                         where dep.classid = 'pg_catalog.pg_attrdef'::regclass and dep.objid = ad.oid
+                           and dep.refclassid = 'pg_catalog.pg_class'::regclass and dep.deptype = 'n')
+        and n.nspname not in ('pg_catalog', 'information_schema')
+      order by 1, 2, 3`);
+    const receipt = await readReceipt(q, versionNum);
     const nonEmptyTables = [];
     for (const table of tables) {
         const [{ non_empty: nonEmpty } = { non_empty: false }] = await q(`select exists (select 1 from ${quoteIdent(TARGET_SCHEMA)}.${quoteIdent(table.name)}) as non_empty`);
@@ -166,13 +176,18 @@ export async function readTargetFacts(client, tableNames, versionNum) {
         publications,
         subscriptionCount: Number(subscriptions),
         sequenceRefs,
+        dynamicSequenceDefaults,
         receipt,
         nonEmptyTables,
         archiverFailedRecently: failing,
         slots,
     };
 }
-async function readReceipt(q) {
+async function readReceipt(q, versionNum) {
+    const adopting = (await q(`select p.pubname::text as name from pg_catalog.pg_publication p
+        where p.puballtables${versionNum >= 150000
+        ? ` or exists (select 1 from pg_catalog.pg_publication_namespace pn join pg_catalog.pg_namespace n on n.oid = pn.pnnspid where pn.pnpubid = p.oid and n.nspname = $1::text)`
+        : ''} order by 1`, versionNum >= 150000 ? [RECEIPT_SCHEMA] : [])).map((row) => row.name);
     const [schema] = await q(`select exists (select 1 from pg_catalog.pg_namespace where nspname = $1::text) as exists,
             case when exists (select 1 from pg_catalog.pg_namespace where nspname = $1::text)
                  then pg_catalog.has_schema_privilege($1::text, 'CREATE')
@@ -191,6 +206,7 @@ async function readReceipt(q) {
       where n.nspname = $1::text and c.relname = $2::text`, [RECEIPT_SCHEMA, RECEIPT_TABLE]);
     return {
         schemaExists: schema?.exists ?? false,
+        adoptingPublications: adopting,
         canCreate: schema?.can_create ?? false,
         table: table
             ? { kind: table.kind, isOwner: table.is_owner, rowSecurity: table.rls, hasTrigger: table.has_trigger, hasRule: table.has_rule, published: table.published, columns: table.columns, primaryKey: table.pk }

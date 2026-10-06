@@ -66,4 +66,5 @@ export interface ClonePlan {
  * removed on every path.
  */
 export declare function planClone(options: PlanOptions): Promise<ClonePlan>;
+/** Plan from an already-verified snapshot. Like `planClone`, nothing but a `CloneRefusal` ever leaves: driver errors are dropped. */
 export declare function planFromSnapshot(snapshot: Snapshot, options: PlanOptions): Promise<ClonePlan>;

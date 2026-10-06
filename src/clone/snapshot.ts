@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSqliteSnapshot } from '@andrewpopov/db-backup';
 import Database from 'better-sqlite3';
-import { CloneRefusal, refuse } from './errors.js';
+import { CloneRefusal, refuse, toRefusal } from './errors.js';
 
 /**
  * What our own reads cannot disturb: the main file's size, mtime and sha256, and the `-wal` size (absent and empty
@@ -66,27 +66,40 @@ async function sha256Of(path: string): Promise<string> {
 }
 
 /**
- * With writers stopped, fold the live `-wal` into the main file and empty it, so the change evidence is stable
- * against our own reads. A reader or writer still holding the database (`busy`) or a `-wal` that is not empty
- * afterwards means somebody is not stopped: refuse. A database that is not in WAL mode reports busy=0, log=-1.
+ * With writers stopped: fold the live `-wal` into the main file and empty it, then take and HOLD the write lock
+ * (`BEGIN IMMEDIATE`) until `release()`. While held, no other connection can commit in either journal mode, so a writer
+ * that was not actually stopped is refused (`live-writer-active`) instead of committing data the snapshot lacks; readers,
+ * db-backup's snapshot included, are unaffected. A busy checkpoint or a `-wal` that is not empty afterwards also means
+ * somebody still holds the database (`live-checkpoint-blocked`). A database that is not in WAL mode reports busy=0, log=-1.
  */
-function checkpointLive(livePath: string): void {
+function holdLive(livePath: string): () => void {
   let db: Database.Database;
   try {
     db = new Database(livePath, { fileMustExist: true, timeout: 2000 });
   } catch {
     return refuse({ code: 'live-checkpoint-blocked' });
   }
+  const release = (): void => {
+    try {
+      if (db.inTransaction) db.exec('ROLLBACK');
+    } finally {
+      db.close();
+    }
+  };
   try {
     const [row] = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[];
     if (row?.busy !== 0) refuse({ code: 'live-checkpoint-blocked' });
+    try {
+      db.exec('BEGIN IMMEDIATE');
+    } catch {
+      return refuse({ code: 'live-writer-active' });
+    }
+    if ((sizeOf(`${livePath}-wal`) ?? 0n) !== 0n) refuse({ code: 'live-checkpoint-blocked' });
   } catch (error) {
-    if (error instanceof CloneRefusal) throw error;
-    return refuse({ code: 'live-checkpoint-blocked' });
-  } finally {
-    db.close();
+    release();
+    throw error instanceof CloneRefusal ? error : new CloneRefusal({ code: 'live-checkpoint-blocked' });
   }
-  if ((sizeOf(`${livePath}-wal`) ?? 0n) !== 0n) refuse({ code: 'live-checkpoint-blocked' });
+  return release;
 }
 
 /** `PRAGMA integrity_check`, `foreign_key_check` and `encoding` on the snapshot, read-only. Refuses on the first failure. */
@@ -125,14 +138,22 @@ const defaultSnapshotFile = (source: string, destination: string): void => {
  * every failing path; on success the caller owns `dispose()`.
  */
 export async function takeSnapshot(options: SnapshotOptions): Promise<Snapshot> {
+  try {
+    return await takeVerifiedSnapshot(options);
+  } catch (error) {
+    throw error instanceof CloneRefusal ? error : new CloneRefusal(toRefusal(error, 'snapshot-failed'));
+  }
+}
+
+async function takeVerifiedSnapshot(options: SnapshotOptions): Promise<Snapshot> {
   if (options.writersStopped !== true) refuse({ code: 'writers-not-stopped' });
   if (sizeOf(options.livePath) === null) refuse({ code: 'live-database-missing' });
-  checkpointLive(options.livePath);
-  const liveBefore = await stampLive(options.livePath);
-
-  const dir = mkdtempSync(join(tmpdir(), 'db-kit-clone-'));
-  const dispose = (): void => rmSync(dir, { recursive: true, force: true });
+  const releaseLive = holdLive(options.livePath);
+  let dir = '';
+  const dispose = (): void => (dir === '' ? undefined : rmSync(dir, { recursive: true, force: true }));
   try {
+    dir = mkdtempSync(join(tmpdir(), 'db-kit-clone-'));
+    const liveBefore = await stampLive(options.livePath);
     chmodSync(dir, 0o700);
     const path = join(dir, 'snapshot.db');
     try {
@@ -148,5 +169,7 @@ export async function takeSnapshot(options: SnapshotOptions): Promise<Snapshot> 
   } catch (error) {
     dispose();
     throw error;
+  } finally {
+    releaseLive();
   }
 }

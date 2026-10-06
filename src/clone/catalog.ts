@@ -85,6 +85,8 @@ export interface SequenceRef {
 
 export interface ReceiptFacts {
   schemaExists: boolean;
+  /** Publications that already include, or would automatically adopt, `db_kit.clone_receipt`: FOR ALL TABLES or FOR TABLES IN SCHEMA db_kit. */
+  adoptingPublications: string[];
   /** Null when `db_kit.clone_receipt` does not exist. */
   table: null | {
     kind: string;
@@ -110,6 +112,8 @@ export interface TargetFacts {
   publications: { publication: string; table: string }[];
   subscriptionCount: number;
   sequenceRefs: SequenceRef[];
+  /** Column defaults anywhere in the database that call nextval() without a resolvable sequence dependency (a text or computed argument). */
+  dynamicSequenceDefaults: { schema: string; table: string; column: string }[];
   receipt: ReceiptFacts;
   nonEmptyTables: string[];
   archiverFailedRecently: boolean;
@@ -351,7 +355,20 @@ export async function readTargetFacts(client: PostgresQueryable, tableNames: rea
     }),
   );
 
-  const receipt = await readReceipt(q);
+  const dynamicSequenceDefaults = await q<{ schema: string; table: string; column: string }>(
+    `select n.nspname::text as schema, c.relname::text as table, a.attname::text as column
+       from pg_catalog.pg_attrdef ad
+       join pg_catalog.pg_class c on c.oid = ad.adrelid join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+       join pg_catalog.pg_attribute a on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+      where position('nextval(' in pg_catalog.lower(pg_catalog.pg_get_expr(ad.adbin, ad.adrelid))) > 0
+        and not exists (select 1 from pg_catalog.pg_depend dep
+                         where dep.classid = 'pg_catalog.pg_attrdef'::regclass and dep.objid = ad.oid
+                           and dep.refclassid = 'pg_catalog.pg_class'::regclass and dep.deptype = 'n')
+        and n.nspname not in ('pg_catalog', 'information_schema')
+      order by 1, 2, 3`,
+  );
+
+  const receipt = await readReceipt(q, versionNum);
 
   const nonEmptyTables: string[] = [];
   for (const table of tables) {
@@ -382,6 +399,7 @@ export async function readTargetFacts(client: PostgresQueryable, tableNames: rea
     publications,
     subscriptionCount: Number(subscriptions),
     sequenceRefs,
+    dynamicSequenceDefaults,
     receipt,
     nonEmptyTables,
     archiverFailedRecently: failing,
@@ -389,7 +407,18 @@ export async function readTargetFacts(client: PostgresQueryable, tableNames: rea
   };
 }
 
-async function readReceipt(q: <Row extends object>(text: string, values?: unknown[]) => Promise<Row[]>): Promise<ReceiptFacts> {
+async function readReceipt(q: <Row extends object>(text: string, values?: unknown[]) => Promise<Row[]>, versionNum: number): Promise<ReceiptFacts> {
+  const adopting = (
+    await q<{ name: string }>(
+      `select p.pubname::text as name from pg_catalog.pg_publication p
+        where p.puballtables${
+          versionNum >= 150000
+            ? ` or exists (select 1 from pg_catalog.pg_publication_namespace pn join pg_catalog.pg_namespace n on n.oid = pn.pnnspid where pn.pnpubid = p.oid and n.nspname = $1::text)`
+            : ''
+        } order by 1`,
+      versionNum >= 150000 ? [RECEIPT_SCHEMA] : [],
+    )
+  ).map((row) => row.name);
   const [schema] = await q<{ exists: boolean; can_create: boolean }>(
     `select exists (select 1 from pg_catalog.pg_namespace where nspname = $1::text) as exists,
             case when exists (select 1 from pg_catalog.pg_namespace where nspname = $1::text)
@@ -423,6 +452,7 @@ async function readReceipt(q: <Row extends object>(text: string, values?: unknow
   );
   return {
     schemaExists: schema?.exists ?? false,
+    adoptingPublications: adopting,
     canCreate: schema?.can_create ?? false,
     table: table
       ? { kind: table.kind, isOwner: table.is_owner, rowSecurity: table.rls, hasTrigger: table.has_trigger, hasRule: table.has_rule, published: table.published, columns: table.columns, primaryKey: table.pk }
