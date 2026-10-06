@@ -32,9 +32,9 @@ function implementationFor(spec: ColumnSpec): CodecImpl {
     case 'timestamp-iso':
       return IMPLEMENTATIONS.timestampIso(spec.preserveText);
     case 'timestamp-epoch-s':
-      return IMPLEMENTATIONS.timestampEpoch(1_000_000n, 's', spec.preserveInteger);
+      return IMPLEMENTATIONS.timestampEpoch(1_000_000n, 's', spec.preserveInteger, spec.acceptSqliteDatetimeText);
     case 'timestamp-epoch-ms':
-      return IMPLEMENTATIONS.timestampEpoch(1_000n, 'ms', spec.preserveInteger);
+      return IMPLEMENTATIONS.timestampEpoch(1_000n, 'ms', spec.preserveInteger, spec.acceptSqliteDatetimeText);
     case 'json-text':
       return IMPLEMENTATIONS.jsonText(spec.preserveText);
     case 'text':

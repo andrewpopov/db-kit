@@ -8,6 +8,9 @@ const columnFields = {
   generated: z.boolean().optional(),
 };
 
+const DATETIME_TEXT_MESSAGE = { message: 'acceptSqliteDatetimeText only makes sense with preserveInteger: false (the column is converted to timestamptz)', path: ['acceptSqliteDatetimeText'] };
+const datetimeTextNeedsConversion = (spec: { preserveInteger: boolean; acceptSqliteDatetimeText: boolean }): boolean => !(spec.acceptSqliteDatetimeText && spec.preserveInteger);
+
 /** Discriminated on `codec`. Nothing is inferred: every column declares its logical type. */
 export const ColumnSpecSchema = z.discriminatedUnion('codec', [
   z.strictObject({ codec: z.literal('text'), ...columnFields }),
@@ -17,8 +20,8 @@ export const ColumnSpecSchema = z.discriminatedUnion('codec', [
   z.strictObject({ codec: z.literal('decimal-as-string'), ...columnFields }),
   z.strictObject({ codec: z.literal('boolean'), ...columnFields }),
   z.strictObject({ codec: z.literal('timestamp-iso'), preserveText: z.boolean().default(true), ...columnFields }),
-  z.strictObject({ codec: z.literal('timestamp-epoch-s'), preserveInteger: z.boolean().default(true), ...columnFields }),
-  z.strictObject({ codec: z.literal('timestamp-epoch-ms'), preserveInteger: z.boolean().default(true), ...columnFields }),
+  z.strictObject({ codec: z.literal('timestamp-epoch-s'), preserveInteger: z.boolean().default(true), acceptSqliteDatetimeText: z.boolean().default(false), ...columnFields }).refine(datetimeTextNeedsConversion, DATETIME_TEXT_MESSAGE),
+  z.strictObject({ codec: z.literal('timestamp-epoch-ms'), preserveInteger: z.boolean().default(true), acceptSqliteDatetimeText: z.boolean().default(false), ...columnFields }).refine(datetimeTextNeedsConversion, DATETIME_TEXT_MESSAGE),
   z.strictObject({ codec: z.literal('json-text'), preserveText: z.boolean().default(true), ...columnFields }),
   z.strictObject({ codec: z.literal('blob'), ...columnFields }),
   z.strictObject({ codec: z.literal('uuid-text'), ...columnFields }),
@@ -61,9 +64,18 @@ export const TableSpecSchema = z
 /** A table that exists (or may exist) but is never copied or verified: a migration ledger, a derived search table. Still declared, so an UNDECLARED table stays an error. */
 export const SkippedTableSchema = z.strictObject({ copy: z.literal(false), reason: z.string().min(1, 'a skipped table needs a reason') });
 
+/** Picks the schema by shape (a `copy` key means a skipped table) rather than `z.union`, so a bad column reports ITS message, not "Invalid input". */
+const TableEntrySchema = z.unknown().transform((entry, ctx): z.output<typeof SkippedTableSchema> | z.output<typeof TableSpecSchema> => {
+  const skipped = typeof entry === 'object' && entry !== null && 'copy' in entry;
+  const parsed = (skipped ? SkippedTableSchema : TableSpecSchema).safeParse(entry);
+  if (parsed.success) return parsed.data;
+  for (const issue of parsed.error.issues) ctx.addIssue({ code: 'custom', message: issue.message, path: issue.path });
+  return z.NEVER;
+});
+
 const RawManifestSchema = z.strictObject({
   version: z.literal(1),
-  tables: ownRecord(z.union([SkippedTableSchema, TableSpecSchema])),
+  tables: ownRecord(TableEntrySchema),
 });
 
 /** `tables` holds the copied tables; a `{ copy: false, reason }` entry moves to `skipped`. */

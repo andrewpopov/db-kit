@@ -275,11 +275,30 @@ function timestampIso(preserveText) {
         canonical: (logical) => (preserveText ? logical.text : canonicalTimestamp(logical.micros)),
     });
 }
-function timestampEpoch(microsPerUnit, unitName, preserveInteger) {
+/** Exactly what SQLite's `datetime()` / `CURRENT_TIMESTAMP` write: UTC, a space, no offset, optional milliseconds. Nothing looser is accepted. */
+const SQLITE_DATETIME = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/;
+/** Postgres-independent: SQLite `datetime()` text read as UTC, as microseconds. Calendar and range checks are `parseTimestamp`'s. */
+function parseSqliteDatetime(text) {
+    const match = SQLITE_DATETIME.exec(text);
+    if (!match)
+        return reject('invalid', 'text must be an integer or exactly SQLite datetime() output (YYYY-MM-DD HH:MM:SS[.SSS], UTC)');
+    const [, year = '', month = '', day = '', hour = '', minute = '', second = '', fraction = ''] = match;
+    return parseTimestamp(`${year}-${month}-${day}T${hour}:${minute}:${second}${fraction ? `.${fraction}` : ''}Z`);
+}
+function timestampEpoch(microsPerUnit, unitName, preserveInteger, acceptDatetimeText) {
     const fromRaw = (raw) => ({ raw, micros: checkRange(raw * microsPerUnit) });
     return implement({
         pgTypes: preserveInteger ? ['bigint'] : ['timestamp with time zone'],
-        fromSqlite: (value) => fromRaw(toInt64(value, `epoch ${unitName}`)),
+        fromSqlite: (value) => {
+            // Opt-in, for a column Prisma wrote as epoch integers and raw SQL wrote with CURRENT_TIMESTAMP: the same instant, in either form.
+            if (acceptDatetimeText && typeof value === 'string' && !/^-?\d+$/.test(value)) {
+                const micros = parseSqliteDatetime(value);
+                if (micros % microsPerUnit !== 0n)
+                    reject('lossy', `datetime text has sub-${unitName === 's' ? 'second' : 'millisecond'} precision and cannot be an epoch ${unitName}`);
+                return { raw: micros / microsPerUnit, micros };
+            }
+            return fromRaw(toInt64(value, `epoch ${unitName}`));
+        },
         fromPg: (value) => {
             if (preserveInteger)
                 return fromRaw(toInt64(value, `epoch ${unitName}`));
