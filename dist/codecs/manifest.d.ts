@@ -34,11 +34,13 @@ export declare const ColumnSpecSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     generated: z.ZodOptional<z.ZodBoolean>;
     codec: z.ZodLiteral<"timestamp-epoch-s">;
     preserveInteger: z.ZodDefault<z.ZodBoolean>;
+    acceptSqliteDatetimeText: z.ZodDefault<z.ZodBoolean>;
 }, z.core.$strict>, z.ZodObject<{
     nullable: z.ZodBoolean;
     generated: z.ZodOptional<z.ZodBoolean>;
     codec: z.ZodLiteral<"timestamp-epoch-ms">;
     preserveInteger: z.ZodDefault<z.ZodBoolean>;
+    acceptSqliteDatetimeText: z.ZodDefault<z.ZodBoolean>;
 }, z.core.$strict>, z.ZodObject<{
     nullable: z.ZodBoolean;
     generated: z.ZodOptional<z.ZodBoolean>;
@@ -55,6 +57,18 @@ export declare const ColumnSpecSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
 }, z.core.$strict>], "codec">;
 export declare const TableSpecSchema: z.ZodObject<{
     columns: z.ZodPipe<z.ZodCustom<Record<string, unknown>, Record<string, unknown>>, z.ZodTransform<Record<string, {
+        nullable: boolean;
+        codec: "timestamp-epoch-s";
+        preserveInteger: boolean;
+        acceptSqliteDatetimeText: boolean;
+        generated?: boolean | undefined;
+    } | {
+        nullable: boolean;
+        codec: "timestamp-epoch-ms";
+        preserveInteger: boolean;
+        acceptSqliteDatetimeText: boolean;
+        generated?: boolean | undefined;
+    } | {
         nullable: boolean;
         codec: "text";
         generated?: boolean | undefined;
@@ -85,16 +99,6 @@ export declare const TableSpecSchema: z.ZodObject<{
         generated?: boolean | undefined;
     } | {
         nullable: boolean;
-        codec: "timestamp-epoch-s";
-        preserveInteger: boolean;
-        generated?: boolean | undefined;
-    } | {
-        nullable: boolean;
-        codec: "timestamp-epoch-ms";
-        preserveInteger: boolean;
-        generated?: boolean | undefined;
-    } | {
-        nullable: boolean;
         codec: "json-text";
         preserveText: boolean;
         generated?: boolean | undefined;
@@ -120,6 +124,18 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
     tables: z.ZodPipe<z.ZodCustom<Record<string, unknown>, Record<string, unknown>>, z.ZodTransform<Record<string, {
         columns: Record<string, {
             nullable: boolean;
+            codec: "timestamp-epoch-s";
+            preserveInteger: boolean;
+            acceptSqliteDatetimeText: boolean;
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
+            codec: "timestamp-epoch-ms";
+            preserveInteger: boolean;
+            acceptSqliteDatetimeText: boolean;
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
             codec: "text";
             generated?: boolean | undefined;
         } | {
@@ -146,16 +162,6 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             nullable: boolean;
             codec: "timestamp-iso";
             preserveText: boolean;
-            generated?: boolean | undefined;
-        } | {
-            nullable: boolean;
-            codec: "timestamp-epoch-s";
-            preserveInteger: boolean;
-            generated?: boolean | undefined;
-        } | {
-            nullable: boolean;
-            codec: "timestamp-epoch-ms";
-            preserveInteger: boolean;
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
@@ -181,6 +187,18 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
     tables: Record<string, {
         columns: Record<string, {
             nullable: boolean;
+            codec: "timestamp-epoch-s";
+            preserveInteger: boolean;
+            acceptSqliteDatetimeText: boolean;
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
+            codec: "timestamp-epoch-ms";
+            preserveInteger: boolean;
+            acceptSqliteDatetimeText: boolean;
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
             codec: "text";
             generated?: boolean | undefined;
         } | {
@@ -207,16 +225,6 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             nullable: boolean;
             codec: "timestamp-iso";
             preserveText: boolean;
-            generated?: boolean | undefined;
-        } | {
-            nullable: boolean;
-            codec: "timestamp-epoch-s";
-            preserveInteger: boolean;
-            generated?: boolean | undefined;
-        } | {
-            nullable: boolean;
-            codec: "timestamp-epoch-ms";
-            preserveInteger: boolean;
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
@@ -242,6 +250,18 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
     tables: Record<string, {
         columns: Record<string, {
             nullable: boolean;
+            codec: "timestamp-epoch-s";
+            preserveInteger: boolean;
+            acceptSqliteDatetimeText: boolean;
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
+            codec: "timestamp-epoch-ms";
+            preserveInteger: boolean;
+            acceptSqliteDatetimeText: boolean;
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
             codec: "text";
             generated?: boolean | undefined;
         } | {
@@ -268,16 +288,6 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             nullable: boolean;
             codec: "timestamp-iso";
             preserveText: boolean;
-            generated?: boolean | undefined;
-        } | {
-            nullable: boolean;
-            codec: "timestamp-epoch-s";
-            preserveInteger: boolean;
-            generated?: boolean | undefined;
-        } | {
-            nullable: boolean;
-            codec: "timestamp-epoch-ms";
-            preserveInteger: boolean;
             generated?: boolean | undefined;
         } | {
             nullable: boolean;

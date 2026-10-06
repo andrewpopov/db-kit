@@ -6,9 +6,9 @@ function implementationFor(spec) {
         case 'timestamp-iso':
             return IMPLEMENTATIONS.timestampIso(spec.preserveText);
         case 'timestamp-epoch-s':
-            return IMPLEMENTATIONS.timestampEpoch(1000000n, 's', spec.preserveInteger);
+            return IMPLEMENTATIONS.timestampEpoch(1000000n, 's', spec.preserveInteger, spec.acceptSqliteDatetimeText);
         case 'timestamp-epoch-ms':
-            return IMPLEMENTATIONS.timestampEpoch(1000n, 'ms', spec.preserveInteger);
+            return IMPLEMENTATIONS.timestampEpoch(1000n, 'ms', spec.preserveInteger, spec.acceptSqliteDatetimeText);
         case 'json-text':
             return IMPLEMENTATIONS.jsonText(spec.preserveText);
         case 'text':

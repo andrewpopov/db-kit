@@ -20,7 +20,7 @@ export interface CodecImpl {
 /** Nesting deeper than this is refused when JSON is parsed, so walking it can never overflow the stack. */
 export declare const MAX_JSON_DEPTH = 512;
 declare function timestampIso(preserveText: boolean): CodecImpl;
-declare function timestampEpoch(microsPerUnit: bigint, unitName: string, preserveInteger: boolean): CodecImpl;
+declare function timestampEpoch(microsPerUnit: bigint, unitName: string, preserveInteger: boolean, acceptDatetimeText: boolean): CodecImpl;
 export declare const IMPLEMENTATIONS: {
     text: CodecImpl;
     integer: CodecImpl;

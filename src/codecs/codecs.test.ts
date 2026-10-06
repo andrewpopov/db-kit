@@ -352,3 +352,51 @@ describe('preserved columns compare the exact stored value (PKG-177 D3)', () => 
     expect(preserved.canonical('1709280000123', 'postgres')).toBe('1709280000123');
   });
 });
+
+describe('acceptSqliteDatetimeText (a column Prisma wrote as epoch integers and raw SQL wrote with CURRENT_TIMESTAMP)', () => {
+  const ms = { codec: 'timestamp-epoch-ms', preserveInteger: false, acceptSqliteDatetimeText: true, ...notNull } as const;
+  const seconds = { codec: 'timestamp-epoch-s', preserveInteger: false, acceptSqliteDatetimeText: true, ...notNull } as const;
+
+  it('a text and an integer for the same instant are the same value: same canonical form, same timestamptz', () => {
+    const codec = codecOf(ms);
+    expect(codec.canonical('2024-03-01 08:00:00.123', 'sqlite')).toBe(codec.canonical(1709280000123, 'sqlite'));
+    expect(codec.toPostgres('2024-03-01 08:00:00.123')).toBe(codec.toPostgres(1709280000123));
+    expect(codec.toPostgres('2024-03-01 08:00:00')).toBe('2024-03-01T08:00:00.000000Z');
+    expect(codec.canonical('2024-03-01 08:00:00.5', 'sqlite')).toBe(codec.canonical(1709280000500, 'sqlite'));
+    expect(codec.canonical('2024-03-01 08:00:00.123', 'sqlite')).toBe(codec.canonical('2024-03-01 08:00:00.123+00', 'postgres'));
+    const s = codecOf(seconds);
+    expect(s.canonical('2024-03-01 08:00:00', 'sqlite')).toBe(s.canonical(1709280000, 'sqlite'));
+  });
+
+  it('reads the text as UTC and writes the INTEGER form back (a reverse clone normalises these rows)', () => {
+    const codec = codecOf(ms);
+    expect(codec.toSqlite('2024-03-01 08:00:00.123+00')).toBe(1709280000123);
+    expect(codec.toSqlite(codec.toPostgres('2024-03-01 08:00:00.123'))).toBe(1709280000123);
+  });
+
+  it('accepts ONLY SQLite datetime() output: a T, an offset, a Z, other formats, garbage and impossible dates are CODEC_INVALID by table.column', () => {
+    const codec = codecOf(ms, 'device_binding', 'created_at');
+    for (const bad of ['2024-03-01T08:00:00', '2024-03-01 08:00:00Z', '2024-03-01 08:00:00+02:00', '2024-03-01 08:00', '2024-03-01', '03/01/2024 08:00:00', 'yesterday', '2024-03-01 08:00:00.1234', ' 2024-03-01 08:00:00', '2026-02-30 08:00:00', '2024-13-01 08:00:00', '2024-03-01 25:00:00']) {
+      const error = errorOf(() => codec.toPostgres(bad));
+      expect({ code: error.code, table: error.table, column: error.column }, bad).toEqual({ code: 'CODEC_INVALID', table: 'device_binding', column: 'created_at' });
+    }
+  });
+
+  it('epoch seconds refuse a fraction they would have to drop', () => {
+    expect(errorOf(() => codecOf(seconds).toPostgres('2024-03-01 08:00:00.500')).code).toBe('CODEC_LOSSY');
+  });
+
+  it('without the option the text is still refused, and integers behave as before', () => {
+    const plain = codecOf({ codec: 'timestamp-epoch-ms', preserveInteger: false, ...notNull });
+    expect(errorOf(() => plain.toPostgres('2024-03-01 08:00:00.123')).code).toBe('CODEC_INVALID');
+    expect(plain.toPostgres(1709280000123)).toBe('2024-03-01T08:00:00.123000Z');
+  });
+
+  it('is refused at manifest validation with preserveInteger: true (explicit or by default)', () => {
+    for (const extra of [{ preserveInteger: true }, {}]) {
+      expect(() => parseCodecManifest({ version: 1, tables: { t: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, at: { codec: 'timestamp-epoch-ms', acceptSqliteDatetimeText: true, nullable: false, ...extra } } } } })).toThrow(/acceptSqliteDatetimeText only makes sense with preserveInteger: false/);
+    }
+    expect(() => parseCodecManifest({ version: 1, tables: { t: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, at: { codec: 'timestamp-epoch-s', acceptSqliteDatetimeText: true, preserveInteger: true, nullable: false } } } } })).toThrow(DbKitError);
+    expect(() => parseCodecManifest({ version: 1, tables: { t: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, at: { codec: 'timestamp-epoch-ms', acceptSqliteDatetimeText: true, preserveInteger: false, nullable: false } } } } })).not.toThrow();
+  });
+});

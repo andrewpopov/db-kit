@@ -175,6 +175,39 @@ describe('executeClone: review follow-ups (session pins, options, SQLite-side ke
   });
 });
 
+describe('executeClone: a column that mixes epoch integers and SQLite datetime() text', () => {
+  const manifest = manifestOf({ version: 1, tables: { bindings: table({ id: int, created_at: { codec: 'timestamp-epoch-ms', preserveInteger: false, acceptSqliteDatetimeText: true, nullable: false } }) } });
+  const ddl = ['create table bindings(id bigint primary key, created_at timestamptz not null)'];
+  const mixed = (): string =>
+    liveSqlite(dir, ['create table bindings(id integer primary key, created_at)', "insert into bindings values (1, 1709280000123), (2, '2024-03-01 08:00:00'), (3, '2024-03-01 08:00:00.123'), (4, 1709280000000)"]);
+
+  it('forward: mixed SQLite -> timestamptz, verification passes, a text and an integer for one instant land identical', async () => {
+    const db = await create(ddl);
+    const result = await executeClone(options(db, mixed(), manifest));
+    expect(result.outcome).toBe('committed');
+    const rows = (await db.admin.query<{ id: string; at: string }>("select id::text, to_char(created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS.MS') as at from bindings order by id")).rows;
+    expect(rows).toEqual([
+      { id: '1', at: '2024-03-01 08:00:00.123' },
+      { id: '2', at: '2024-03-01 08:00:00.000' },
+      { id: '3', at: '2024-03-01 08:00:00.123' },
+      { id: '4', at: '2024-03-01 08:00:00.000' },
+    ]);
+  });
+
+  it('without the option the same rows are refused by table.column, and nothing is written', async () => {
+    const db = await create(ddl);
+    const strict = manifestOf({ version: 1, tables: { bindings: table({ id: int, created_at: { codec: 'timestamp-epoch-ms', preserveInteger: false, nullable: false } }) } });
+    expect(await refusalOf(() => executeClone(options(db, mixed(), strict)))).toEqual({ code: 'codec-invalid', table: 'bindings', column: 'created_at' });
+    expect(((await db.admin.query('select count(*)::int as n from bindings')).rows[0] as { n: number }).n).toBe(0);
+  });
+
+  it('a text that is not datetime() output is refused by name, naming nothing else', async () => {
+    const db = await create(ddl);
+    const live = liveSqlite(dir, ['create table bindings(id integer primary key, created_at)', "insert into bindings values (1, '2024-03-01T08:00:00Z')"]);
+    expect(await refusalOf(() => executeClone(options(db, live, manifest)))).toEqual({ code: 'codec-invalid', table: 'bindings', column: 'created_at' });
+  });
+});
+
 describe('executeClone: copy:false tables', () => {
   it('never copies, verifies, counts or truncates a skipped ledger: its rows on both sides stay exactly where they are', async () => {
     const manifest = manifestOf({ version: 1, tables: { items: table({ id: int, name: text }), _ledger: { copy: false, reason: 'migration ledger' } } });

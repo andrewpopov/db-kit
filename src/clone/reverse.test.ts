@@ -373,6 +373,24 @@ describe('reverseClone: review follow-ups', () => {
   });
 });
 
+describe('reverseClone: a column that mixed epoch integers and SQLite datetime() text', () => {
+  it('forward then reverse normalises every row to an INTEGER and verification passes', async () => {
+    const manifest = manifestOf({ version: 1, tables: { bindings: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, created_at: { codec: 'timestamp-epoch-ms', preserveInteger: false, acceptSqliteDatetimeText: true, nullable: false } } } } });
+    const db = await create(['create table bindings(id bigint primary key, created_at timestamptz not null)']);
+    const mixed = liveSqlite(dir, ['create table bindings(id integer primary key, created_at)', "insert into bindings values (1, 1709280000123), (2, '2024-03-01 08:00:00'), (3, '2024-03-01 08:00:00.123')"]);
+    await executeClone({ livePath: mixed, writersStopped: true, manifest, target: db.config, confirmProduction: confirmationOf(db) });
+    const opts = options(db, manifest, liveSqlite(dir, ['create table bindings(id integer primary key, created_at)']));
+    await reverseClone(opts);
+    const check = new Database(opts.toSqlitePath, { readonly: true });
+    expect(check.prepare('select id, created_at, typeof(created_at) as t from bindings order by id').all()).toEqual([
+      { id: 1, created_at: 1709280000123, t: 'integer' },
+      { id: 2, created_at: 1709280000000, t: 'integer' },
+      { id: 3, created_at: 1709280000123, t: 'integer' },
+    ]);
+    check.close();
+  });
+});
+
 describe('reverseClone: a killed process', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
   it('SIGKILLed mid-clone leaves no file at the target path (only a hidden temp), and the next run still works', async () => {

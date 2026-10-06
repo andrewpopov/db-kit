@@ -314,12 +314,15 @@ async function readSourceIdentity(client, options) {
     return identity;
 }
 const CURSOR = 'db_kit_reverse_load';
+/** Codecs whose SQLite value is an INTEGER. better-sqlite3 binds a JS number as REAL, which an untyped (or BLOB-affinity) column would keep as REAL: bind these as bigint. */
+const INTEGER_VALUED = new Set(['integer', 'boolean', 'timestamp-epoch-s', 'timestamp-epoch-ms']);
 /** Stream one table out of the Postgres snapshot into the SQLite transaction, converted by each column's codec. Lossy values refuse by name. */
 async function loadTable(client, db, table, columns, orderBy, fetchRows) {
     const names = columns.map((column) => quoteIdent(column.column)).join(', ');
     const insert = db.prepare(`insert into ${quoteIdent(table)} (${names}) values (${columns.map(() => '?').join(', ')})`);
     await client.query(`DECLARE ${CURSOR} NO SCROLL CURSOR FOR select ${names} from ${quoteIdent(TARGET_SCHEMA)}.${quoteIdent(table)} order by ${orderBy}`);
     let rows = 0;
+    const integerColumns = columns.map((column) => INTEGER_VALUED.has(column.spec.codec));
     try {
         for (;;) {
             const { rows: batch } = await client.query({ text: `FETCH FORWARD ${fetchRows} FROM ${CURSOR}`, rowMode: 'array', types: VERIFY_TYPES });
@@ -327,8 +330,10 @@ async function loadTable(client, db, table, columns, orderBy, fetchRows) {
                 break;
             for (const row of batch) {
                 const values = new Array(columns.length);
-                for (let i = 0; i < columns.length; i++)
-                    values[i] = columns[i].toSqlite(row[i]);
+                for (let i = 0; i < columns.length; i++) {
+                    const converted = columns[i].toSqlite(row[i]);
+                    values[i] = typeof converted === 'number' && integerColumns[i] ? BigInt(converted) : converted;
+                }
                 insert.run(...values);
                 rows++;
             }
