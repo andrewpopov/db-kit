@@ -35,6 +35,10 @@
       "types": "./dist/clone.d.ts",
       "default": "./dist/clone.js"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -71,10 +75,18 @@
     "zod": "^4.0.0"
   },
   "peerDependencies": {
-    "drizzle-orm": "^0.45.0"
+    "drizzle-orm": "^0.45.0",
+    "embedded-postgres": ">=17.0.0-beta.0",
+    "vitest": ">=1.0.0"
   },
   "peerDependenciesMeta": {
     "drizzle-orm": {
+      "optional": true
+    },
+    "embedded-postgres": {
+      "optional": true
+    },
+    "vitest": {
       "optional": true
     }
   },
