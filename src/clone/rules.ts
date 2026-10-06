@@ -1,4 +1,4 @@
-import type { CodecManifest } from '../codecs/manifest.js';
+import { jsonPgType, type CodecManifest } from '../codecs/manifest.js';
 import { RECEIPT_COLUMNS, RECEIPT_PRIMARY_KEY, RECEIPT_SCHEMA, RECEIPT_TABLE, TARGET_SCHEMA, type ForeignKeyFact, type ReceiptFacts, type SequenceRef, type TargetFacts } from './catalog.js';
 import type { Refusal } from './errors.js';
 
@@ -28,7 +28,7 @@ export interface GateResult {
 /** A primary-key column whose order differs between SQLite text and the Postgres type it converts to, so row-by-row verification cannot line the two sides up. */
 function reordersOnConversion(spec: CodecManifest['tables'][string]['columns'][string] | undefined): boolean {
   if (!spec) return false;
-  return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && !spec.preserveText);
+  return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && jsonPgType(spec) !== 'text') || spec.codec === 'timestamp-naive';
 }
 
 const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((value, index) => value === b[index]);

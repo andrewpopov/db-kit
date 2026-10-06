@@ -1,4 +1,4 @@
-import type { CodecManifest } from '../codecs/manifest.js';
+import { type CodecManifest } from '../codecs/manifest.js';
 import { type ForeignKeyFact, type ReceiptFacts, type SequenceRef, type TargetFacts } from './catalog.js';
 import type { Refusal } from './errors.js';
 export declare const DEFAULT_MAX_SLOT_RETENTION_BYTES: bigint;

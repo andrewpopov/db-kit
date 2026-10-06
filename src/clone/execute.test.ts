@@ -274,7 +274,7 @@ describe('executeClone: the target is logically unchanged on every failure', () 
     expect(refusal).toEqual({ code: 'load-failed', table: 'child' });
   });
 
-  it('a foreign key violated by the data fails when it is re-added, and the target is unchanged', async () => {
+  it('a foreign key violated by the data is refused under the locks before any load, and the target is unchanged', async () => {
     const db = await create(SMALL_DDL);
     const live = liveSqlite(dir, [
       'create table parent(id integer primary key)',
@@ -283,7 +283,7 @@ describe('executeClone: the target is logically unchanged on every failure', () 
       'insert into child values (7, 55)',
     ]);
     const before = await stateOf(db, TABLES, SEQS);
-    expect(await refusalOf(() => executeClone(options(db, live, SMALL_MANIFEST)))).toEqual({ code: 'execute-failed' });
+    expect(await refusalOf(() => executeClone(options(db, live, SMALL_MANIFEST)))).toEqual({ code: 'orphan-foreign-keys', table: 'child', object: 'child_parent_fk -> parent, 1 rows' });
     expect(await stateOf(db, TABLES, SEQS)).toEqual(before);
   });
 

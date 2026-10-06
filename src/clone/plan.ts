@@ -10,6 +10,7 @@ import { readIdentity, readTargetFacts, TARGET_SCHEMA, type ForeignKeyFact, type
 import { CloneRefusal, refuse, toRefusal, type Refusal } from './errors.js';
 import { DEFAULT_MAX_SLOT_RETENTION_BYTES, evaluateGate } from './rules.js';
 import { nonNegativeBigint } from './options.js';
+import { sourceLimitRefusals, type SkippedCheck } from './value-limits.js';
 import { openSnapshot, readSequenceSource, restartValue, scanSource, sqliteSkippedKeyRefusals, type SourceFacts, type SourceTableFacts } from './source.js';
 import { takeSnapshot, type Snapshot, type SnapshotOptions } from './snapshot.js';
 import { isProduction, productionConfirmation, type TopologyEntry } from './topology.js';
@@ -69,6 +70,8 @@ export interface ClonePlan {
   incomingReferences: ForeignKeyFact[];
   sequences: PlannedSequence[];
   refusals: Refusal[];
+  /** Checks not run (informational, never a refusal), e.g. an orphan scan of a key SQLite cannot compare the way Postgres does. */
+  skippedChecks: SkippedCheck[];
 }
 
 /**
@@ -118,7 +121,7 @@ async function buildPlan(snapshot: Snapshot, options: PlanOptions): Promise<Clon
 }
 
 export function emptyPlan(snapshot: Pick<Snapshot, 'sha256' | 'bytes'>): ClonePlan {
-  return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], skippedTables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [] };
+  return { ok: false, snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes }, target: null, tables: [], skippedTables: [], foreignKeys: [], incomingReferences: [], sequences: [], refusals: [], skippedChecks: [] };
 }
 
 /** The snapshot side of a plan: its schema and the one-scan source facts. Shared by planning and execution. */
@@ -166,7 +169,8 @@ export async function inspectTarget(client: Client, context: SourceContext, plan
   if (production && options.confirmProduction !== confirmation) plan.refusals.push({ code: 'production-unconfirmed' });
   if (identity.inRecovery) return finish();
 
-  const validation = validateManifest(manifest, { sqlite: sqliteSchema, postgres: await introspectPostgres(client, TARGET_SCHEMA) });
+  const postgresSchema = await introspectPostgres(client, TARGET_SCHEMA);
+  const validation = validateManifest(manifest, { sqlite: sqliteSchema, postgres: postgresSchema });
   if (!validation.ok) {
     for (const issue of validation.issues) plan.refusals.push({ code: 'manifest-invalid', table: issue.table, ...(issue.column === undefined ? {} : { column: issue.column }), object: `${issue.side}:${issue.code}` });
     return finish();
@@ -177,6 +181,9 @@ export async function inspectTarget(client: Client, context: SourceContext, plan
   const gate = evaluateGate(facts, manifest, { truncate, maxSlotRetentionBytes: options.maxSlotRetentionBytes ?? DEFAULT_MAX_SLOT_RETENTION_BYTES });
   plan.refusals.push(...gate.refusals);
   plan.foreignKeys = gate.foreignKeys;
+  const limits = sourceLimitRefusals(db, manifest, postgresSchema, gate.foreignKeys);
+  plan.refusals.push(...limits.refusals);
+  plan.skippedChecks.push(...limits.skipped);
   plan.incomingReferences = gate.incomingReferences;
   plan.tables = source.tables.map((table) => {
     const targetNonEmpty = facts.nonEmptyTables.includes(table.table);

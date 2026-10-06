@@ -30,9 +30,12 @@ export declare const IMPLEMENTATIONS: {
     boolean: CodecImpl;
     blob: CodecImpl;
     'uuid-text': CodecImpl;
+    'timestamp-naive': CodecImpl;
+    'date-text': CodecImpl;
     timestampIso: typeof timestampIso;
     timestampEpoch: typeof timestampEpoch;
     jsonText: typeof jsonText;
 };
-declare function jsonText(preserveText: boolean): CodecImpl;
+/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim, duplicate keys included); only `jsonb` normalises, and refuses duplicate keys. */
+declare function jsonText(pgType: 'text' | 'json' | 'jsonb'): CodecImpl;
 export {};

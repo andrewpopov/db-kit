@@ -3,8 +3,10 @@ export interface StartTestPostgresOptions {
     /** Appended to the server's command line, as `-c name=value` pairs. */
     extraFlags?: readonly string[];
     /**
-     * Database locale. `'C'` (or any libc locale name) or `'icu:<name>'` (for example `'icu:en-US'`, needs a server
-     * built with ICU). Default: the host's initdb default.
+     * Database locale. `'C'` (or any libc locale name), `'icu:<name>'` (for example `'icu:en-US'`, needs a server
+     * built with ICU) or `'builtin:<name>'` (for example `'builtin:C.UTF-8'`, the PG 17 builtin provider production
+     * uses; needs a PG 17+ server). Default: the host's initdb default (an explicit option, not the default, so an
+     * existing suite's collation does not change under it).
      */
     locale?: string;
     /** Serve TLS with a self-signed certificate (needs `openssl`); `san` is its subjectAltName. Default: no TLS. */

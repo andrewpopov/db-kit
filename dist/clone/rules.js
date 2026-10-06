@@ -1,3 +1,4 @@
+import { jsonPgType } from '../codecs/manifest.js';
 import { RECEIPT_COLUMNS, RECEIPT_PRIMARY_KEY, RECEIPT_SCHEMA, RECEIPT_TABLE, TARGET_SCHEMA } from './catalog.js';
 const RECEIPT_REFUSAL = { code: 'receipt-table-invalid', table: `${RECEIPT_SCHEMA}.${RECEIPT_TABLE}` };
 export const DEFAULT_MAX_SLOT_RETENTION_BYTES = 5n * 1024n ** 3n;
@@ -5,7 +6,7 @@ export const DEFAULT_MAX_SLOT_RETENTION_BYTES = 5n * 1024n ** 3n;
 function reordersOnConversion(spec) {
     if (!spec)
         return false;
-    return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && !spec.preserveText);
+    return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && jsonPgType(spec) !== 'text') || spec.codec === 'timestamp-naive';
 }
 const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
 /**

@@ -1,4 +1,4 @@
-import type { CodecManifest } from '../codecs/manifest.js';
+import { type CodecManifest } from '../codecs/manifest.js';
 type TableSpec = CodecManifest['tables'][string];
 /**
  * ORDER BY for the SQLite snapshot: text keys `COLLATE BINARY` (never the column's declared collation), uuid text

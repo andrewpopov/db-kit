@@ -120,10 +120,10 @@ function canonicalJsonNumber(token) {
 }
 /**
  * Re-emit valid JSON text by walking its tokens, never through `JSON.parse` values, so a number keeps every digit.
- * `canonical` also sorts keys and normalises numbers; duplicate keys and nesting past `MAX_JSON_DEPTH` are refused; without it only whitespace
+ * `canonical` also sorts keys and normalises numbers; duplicate keys are refused unless `allowDuplicateKeys` (text kept verbatim) and nesting past `MAX_JSON_DEPTH` is always refused; without it only whitespace
  * is dropped. Strings are decoded and re-encoded, so `"\u0041"` and `"A"` are the same.
  */
-function renderJson(text, canonical) {
+function renderJson(text, canonical, allowDuplicateKeys = false) {
     const depthLimit = () => reject('invalid', `JSON is nested deeper than ${MAX_JSON_DEPTH} levels`);
     let at = 0;
     const skip = () => {
@@ -156,7 +156,7 @@ function renderJson(text, canonical) {
                     const key = str();
                     skip();
                     at++;
-                    if (seen.has(key))
+                    if (!allowDuplicateKeys && seen.has(key))
                         reject('invalid', 'duplicate JSON object key (no engine keeps both, so no faithful mapping exists)');
                     seen.add(key);
                     members.push([key, value(depth + 1)]);
@@ -275,6 +275,25 @@ function timestampIso(preserveText) {
         canonical: (logical) => (preserveText ? logical.text : canonicalTimestamp(logical.micros)),
     });
 }
+/** SQLAlchemy's SQLite DATETIME storage, and what Postgres prints for `timestamp`: no `T`, no offset, 1-6 fractional digits. Nothing looser. */
+const NAIVE_DATETIME = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/;
+/** Microseconds of a wall-clock `YYYY-MM-DD HH:MM:SS[.f{1,6}]`, taken as if it were UTC (a naive timestamp has no zone; only ordering and equality matter). */
+function parseNaiveDatetime(value) {
+    const match = typeof value === 'string' ? NAIVE_DATETIME.exec(value) : null;
+    if (!match)
+        return reject('invalid', 'timestamp-naive must be exactly YYYY-MM-DD HH:MM:SS[.ffffff] text (no T, offset or Z)');
+    const [, year = '', month = '', day = '', hour = '', minute = '', second = '', fraction = ''] = match;
+    return parseTimestamp(`${year}-${month}-${day}T${hour}:${minute}:${second}${fraction ? `.${fraction}` : ''}Z`);
+}
+/** Microsecond ISO, no offset: `YYYY-MM-DDTHH:MM:SS.ffffff`. */
+const naiveIso = (micros) => canonicalTimestamp(micros).slice(0, -1);
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+function parseDateOnly(value) {
+    if (typeof value !== 'string' || !DATE_ONLY.test(value))
+        return reject('invalid', 'date-text must be exactly YYYY-MM-DD text');
+    parseTimestamp(`${value}T00:00:00Z`);
+    return value;
+}
 /** Exactly what SQLite's `datetime()` / `CURRENT_TIMESTAMP` write: UTC, a space, no offset, optional milliseconds. Nothing looser is accepted. */
 const SQLITE_DATETIME = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/;
 /** Postgres-independent: SQLite `datetime()` text read as UTC, as microseconds. Calendar and range checks are `parseTimestamp`'s. */
@@ -312,6 +331,14 @@ function timestampEpoch(microsPerUnit, unitName, preserveInteger, acceptDatetime
         canonical: (logical) => (preserveInteger ? logical.raw.toString() : canonicalTimestamp(logical.micros)),
     });
 }
+const timestampNaive = implement({
+    pgTypes: ['timestamp without time zone'],
+    fromSqlite: (value) => (typeof value === 'string' ? parseNaiveDatetime(value) : reject('invalid', 'timestamp-naive must be TEXT')),
+    fromPg: parseNaiveDatetime,
+    toSqlite: (micros) => naiveIso(micros).replace('T', ' '),
+    toPg: (micros) => naiveIso(micros).replace('T', ' '),
+    canonical: naiveIso,
+});
 const identity = (value) => value;
 export const IMPLEMENTATIONS = {
     text: implement({
@@ -384,20 +411,31 @@ export const IMPLEMENTATIONS = {
         toPg: identity,
         canonical: identity,
     }),
+    'timestamp-naive': timestampNaive,
+    'date-text': implement({
+        pgTypes: ['date'],
+        fromSqlite: (value) => (typeof value === 'string' ? parseDateOnly(value) : reject('invalid', 'date-text must be TEXT')),
+        fromPg: parseDateOnly,
+        toSqlite: identity,
+        toPg: identity,
+        canonical: identity,
+    }),
     timestampIso,
     timestampEpoch,
     jsonText,
 };
-function jsonText(preserveText) {
+/** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim, duplicate keys included); only `jsonb` normalises, and refuses duplicate keys. */
+function jsonText(pgType) {
+    const preserveText = pgType !== 'jsonb';
     const parse = (value) => {
         if (typeof value !== 'string')
             return reject('invalid', 'JSON must be text (read Postgres with POSTGRES_CODEC_TYPES)');
         parseJson(value);
-        renderJson(value, false); // refuses duplicate keys and excessive depth up front
+        renderJson(value, false, preserveText); // refuses excessive depth, and duplicate keys where a single object must result (jsonb)
         return value;
     };
     return implement({
-        pgTypes: preserveText ? ['text'] : ['jsonb'],
+        pgTypes: [pgType],
         fromSqlite: parse,
         fromPg: parse,
         toSqlite: (text) => (preserveText ? text : renderJson(text, false)),

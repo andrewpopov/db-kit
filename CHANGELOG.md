@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.3.0
+
+- timestamp-naive and date-text codecs, and a pgType option for json-text (text, json or jsonb)
+  `timestamp-naive` maps SQLAlchemy's SQLite DATETIME text (`YYYY-MM-DD HH:MM:SS` with an optional 1-6 digit fraction) to Postgres `timestamp without time zone`, keeping microseconds; a `T`, an offset, `Z` or an impossible date is `CODEC_INVALID`. `date-text` maps `YYYY-MM-DD` text to Postgres `date`. `json-text` gains `pgType: 'text' | 'json' | 'jsonb'`: without it `preserveText` still decides (true is text, false is jsonb), and a `pgType` that disagrees with `preserveText` is a manifest parse error. Postgres `json` stores its input verbatim, so it compares the exact text like `text`. `NaN`, `Infinity` and `-Infinity` tokens are refused for every `pgType`. `POSTGRES_CODEC_TYPES` now reads `timestamp` and `date` as raw text too.
+- clone refuses varchar overflow, integer width and orphan foreign keys in the plan, before any load
+  `planClone` (so `--plan-only`) and the authoritative re-check under the locks now scan the snapshot for three things that used to fail mid-COPY or at the final `ADD CONSTRAINT`. `varchar-overflow`: a value longer in characters than the target's `character varying(n)` or `character(n)`. `integer-width`: an `integer` / `bigint` codec value outside the target `smallint` / `integer` / `bigint` range. `orphan-foreign-keys`: a child row whose non-NULL key columns match no parent row for a target foreign key between copied tables (MATCH SIMPLE). Each names the table, column or constraint plus counts and bounds, never a value. `IntrospectedColumn` gains an optional `maxLength` and `ForeignKeyFact` gains `columns` / `refColumns`.
+- startTestPostgres accepts locale 'builtin:<name>' (PG 17 builtin provider); embedded-postgres peer range bounded to 17.x and 18.x
+  `startTestPostgres({ locale: 'builtin:C.UTF-8' })` initialises with `--locale-provider=builtin --builtin-locale=C.UTF-8`, matching production. It is opt-in: the default locale is unchanged. The optional `embedded-postgres` peer range is now `>=17.0.0-beta.0 <19.0.0-0`, stating the supported PG majors (the 17.x and 18.x betas).
+- clone preflights no longer refuse equal keys or miss unequal ones, count TEXT integers, scan orphans in linear time; json pgType keeps duplicate keys
+  The orphan-foreign-keys preflight now runs only for keys where raw SQLite equality is Postgres equality (integer/bigint codecs over INTEGER storage, or text codecs over TEXT storage compared `COLLATE BINARY`); other keys are listed as `orphan-check-skipped` in the plan (`skippedChecks`) and left to the re-`ADD CONSTRAINT` safety net, so equal timestamps, UUIDs and `'01'`/`'1'` are no longer refused and `NOCASE`/`RTRIM` columns no longer hide an orphan. The scan is a `LEFT JOIN` (linear, 0.21 s for 1M x 1M with an unindexed parent key; the correlated lookup was quadratic). `integer-width` now counts decimal-integer TEXT the codec accepts. `json-text` with `pgType` `text` or `json` accepts duplicate object keys (stored verbatim); `jsonb` still refuses them.
+- startTestPostgres no longer lets embedded-postgres turn a failing test run into exit 0
+  Importing `embedded-postgres` installs an `async-exit-hook` whose `beforeExit` handler calls `process.exit(0)`, overriding a runner's `process.exitCode = 1` (a vitest `globalSetup` that started a server made a failing run exit 0). `startTestPostgres` now removes exactly the process listeners that import added, immediately after it, and cleans up its own servers on `exit` and on SIGHUP/SIGINT/SIGTERM (the signal is re-raised, never turned into exit 0). The server child is unref'd so an unstopped server cannot hang the process.
+
 ## 0.2.0
 
 - acceptSqliteDatetimeText for timestamp-epoch-ms / timestamp-epoch-s columns that mix integers and SQLite datetime() text

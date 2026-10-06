@@ -45,7 +45,20 @@ export declare const ColumnSpecSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     nullable: z.ZodBoolean;
     generated: z.ZodOptional<z.ZodBoolean>;
     codec: z.ZodLiteral<"json-text">;
-    preserveText: z.ZodDefault<z.ZodBoolean>;
+    preserveText: z.ZodOptional<z.ZodBoolean>;
+    pgType: z.ZodOptional<z.ZodEnum<{
+        text: "text";
+        json: "json";
+        jsonb: "jsonb";
+    }>>;
+}, z.core.$strict>, z.ZodObject<{
+    nullable: z.ZodBoolean;
+    generated: z.ZodOptional<z.ZodBoolean>;
+    codec: z.ZodLiteral<"timestamp-naive">;
+}, z.core.$strict>, z.ZodObject<{
+    nullable: z.ZodBoolean;
+    generated: z.ZodOptional<z.ZodBoolean>;
+    codec: z.ZodLiteral<"date-text">;
 }, z.core.$strict>, z.ZodObject<{
     nullable: z.ZodBoolean;
     generated: z.ZodOptional<z.ZodBoolean>;
@@ -55,6 +68,11 @@ export declare const ColumnSpecSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     generated: z.ZodOptional<z.ZodBoolean>;
     codec: z.ZodLiteral<"uuid-text">;
 }, z.core.$strict>], "codec">;
+/** The Postgres column type a `json-text` column maps to: `pgType`, else `preserveText` (default true -> text, false -> jsonb). */
+export declare function jsonPgType(spec: {
+    pgType?: 'text' | 'json' | 'jsonb' | undefined;
+    preserveText?: boolean | undefined;
+}): 'text' | 'json' | 'jsonb';
 export declare const TableSpecSchema: z.ZodObject<{
     columns: z.ZodPipe<z.ZodCustom<Record<string, unknown>, Record<string, unknown>>, z.ZodTransform<Record<string, {
         nullable: boolean;
@@ -68,6 +86,12 @@ export declare const TableSpecSchema: z.ZodObject<{
         preserveInteger: boolean;
         acceptSqliteDatetimeText: boolean;
         generated?: boolean | undefined;
+    } | {
+        nullable: boolean;
+        codec: "json-text";
+        generated?: boolean | undefined;
+        preserveText?: boolean | undefined;
+        pgType?: "text" | "json" | "jsonb" | undefined;
     } | {
         nullable: boolean;
         codec: "text";
@@ -99,8 +123,11 @@ export declare const TableSpecSchema: z.ZodObject<{
         generated?: boolean | undefined;
     } | {
         nullable: boolean;
-        codec: "json-text";
-        preserveText: boolean;
+        codec: "timestamp-naive";
+        generated?: boolean | undefined;
+    } | {
+        nullable: boolean;
+        codec: "date-text";
         generated?: boolean | undefined;
     } | {
         nullable: boolean;
@@ -136,6 +163,12 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
+            codec: "json-text";
+            generated?: boolean | undefined;
+            preserveText?: boolean | undefined;
+            pgType?: "text" | "json" | "jsonb" | undefined;
+        } | {
+            nullable: boolean;
             codec: "text";
             generated?: boolean | undefined;
         } | {
@@ -165,8 +198,11 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
-            codec: "json-text";
-            preserveText: boolean;
+            codec: "timestamp-naive";
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
+            codec: "date-text";
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
@@ -199,6 +235,12 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
+            codec: "json-text";
+            generated?: boolean | undefined;
+            preserveText?: boolean | undefined;
+            pgType?: "text" | "json" | "jsonb" | undefined;
+        } | {
+            nullable: boolean;
             codec: "text";
             generated?: boolean | undefined;
         } | {
@@ -228,8 +270,11 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
-            codec: "json-text";
-            preserveText: boolean;
+            codec: "timestamp-naive";
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
+            codec: "date-text";
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
@@ -262,6 +307,12 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
+            codec: "json-text";
+            generated?: boolean | undefined;
+            preserveText?: boolean | undefined;
+            pgType?: "text" | "json" | "jsonb" | undefined;
+        } | {
+            nullable: boolean;
             codec: "text";
             generated?: boolean | undefined;
         } | {
@@ -291,8 +342,11 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
-            codec: "json-text";
-            preserveText: boolean;
+            codec: "timestamp-naive";
+            generated?: boolean | undefined;
+        } | {
+            nullable: boolean;
+            codec: "date-text";
             generated?: boolean | undefined;
         } | {
             nullable: boolean;

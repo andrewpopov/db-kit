@@ -5,6 +5,7 @@ import type { CodecManifest } from '../codecs/manifest.js';
 import type { PostgresConfig } from '../url.js';
 import { type ForeignKeyFact, type TargetIdentityFacts } from './catalog.js';
 import { type Refusal } from './errors.js';
+import { type SkippedCheck } from './value-limits.js';
 import { type SourceFacts, type SourceTableFacts } from './source.js';
 import { type Snapshot, type SnapshotOptions } from './snapshot.js';
 import { type TopologyEntry } from './topology.js';
@@ -65,6 +66,8 @@ export interface ClonePlan {
     incomingReferences: ForeignKeyFact[];
     sequences: PlannedSequence[];
     refusals: Refusal[];
+    /** Checks not run (informational, never a refusal), e.g. an orphan scan of a key SQLite cannot compare the way Postgres does. */
+    skippedChecks: SkippedCheck[];
 }
 /**
  * Everything clone decides before writing anything: take and verify the snapshot, scan it, read the target in one

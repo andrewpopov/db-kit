@@ -76,6 +76,21 @@ describe('startTestPostgres / createTestDatabase', () => {
     }
   }, 180_000);
 
+  it('initialises with the builtin locale provider when asked (PG 17)', async () => {
+    const custom = await startTestPostgres({ locale: 'builtin:C.UTF-8' });
+    try {
+      const client = new Client({ ...custom.config, ssl: false });
+      await client.connect();
+      try {
+        expect((await client.query('select datlocprovider, datlocale from pg_database where datname = current_database()')).rows[0]).toEqual({ datlocprovider: 'b', datlocale: 'C.UTF-8' });
+      } finally {
+        await client.end();
+      }
+    } finally {
+      await custom.stop();
+    }
+  }, 180_000);
+
   it('a start that cannot succeed rejects (and leaves no server behind)', async () => {
     await expect(startTestPostgres({ locale: 'no_such_locale_xyz' })).rejects.toThrow();
   }, 120_000);

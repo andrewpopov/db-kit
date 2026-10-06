@@ -11,6 +11,10 @@ const columnFields = {
 const DATETIME_TEXT_MESSAGE = { message: 'acceptSqliteDatetimeText only makes sense with preserveInteger: false (the column is converted to timestamptz)', path: ['acceptSqliteDatetimeText'] };
 const datetimeTextNeedsConversion = (spec: { preserveInteger: boolean; acceptSqliteDatetimeText: boolean }): boolean => !(spec.acceptSqliteDatetimeText && spec.preserveInteger);
 
+const JSON_PG_TYPE_MESSAGE = { message: 'pgType and preserveText disagree (preserveText: true means text, false means jsonb); declare only pgType', path: ['pgType'] };
+const jsonOptionsAgree = (spec: { pgType?: 'text' | 'json' | 'jsonb' | undefined; preserveText?: boolean | undefined }): boolean =>
+  spec.pgType === undefined || spec.preserveText === undefined || (spec.preserveText ? spec.pgType === 'text' : spec.pgType === 'jsonb');
+
 /** Discriminated on `codec`. Nothing is inferred: every column declares its logical type. */
 export const ColumnSpecSchema = z.discriminatedUnion('codec', [
   z.strictObject({ codec: z.literal('text'), ...columnFields }),
@@ -22,10 +26,17 @@ export const ColumnSpecSchema = z.discriminatedUnion('codec', [
   z.strictObject({ codec: z.literal('timestamp-iso'), preserveText: z.boolean().default(true), ...columnFields }),
   z.strictObject({ codec: z.literal('timestamp-epoch-s'), preserveInteger: z.boolean().default(true), acceptSqliteDatetimeText: z.boolean().default(false), ...columnFields }).refine(datetimeTextNeedsConversion, DATETIME_TEXT_MESSAGE),
   z.strictObject({ codec: z.literal('timestamp-epoch-ms'), preserveInteger: z.boolean().default(true), acceptSqliteDatetimeText: z.boolean().default(false), ...columnFields }).refine(datetimeTextNeedsConversion, DATETIME_TEXT_MESSAGE),
-  z.strictObject({ codec: z.literal('json-text'), preserveText: z.boolean().default(true), ...columnFields }),
+  z.strictObject({ codec: z.literal('json-text'), preserveText: z.boolean().optional(), pgType: z.enum(['text', 'json', 'jsonb']).optional(), ...columnFields }).refine(jsonOptionsAgree, JSON_PG_TYPE_MESSAGE),
+  z.strictObject({ codec: z.literal('timestamp-naive'), ...columnFields }),
+  z.strictObject({ codec: z.literal('date-text'), ...columnFields }),
   z.strictObject({ codec: z.literal('blob'), ...columnFields }),
   z.strictObject({ codec: z.literal('uuid-text'), ...columnFields }),
 ]);
+
+/** The Postgres column type a `json-text` column maps to: `pgType`, else `preserveText` (default true -> text, false -> jsonb). */
+export function jsonPgType(spec: { pgType?: 'text' | 'json' | 'jsonb' | undefined; preserveText?: boolean | undefined }): 'text' | 'json' | 'jsonb' {
+  return spec.pgType ?? (spec.preserveText === false ? 'jsonb' : 'text');
+}
 
 /**
  * A record whose keys are copied with `defineProperty`: zod's own `record` assigns `result[key]`, which for the key

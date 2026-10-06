@@ -107,6 +107,26 @@ try {
   console.log(`plan (snapshot + scan + preflight) ${secs(started)}s ok=${plan.ok} refusals=${JSON.stringify(plan.refusals)}`);
   if (!plan.ok) process.exit(1);
 
+  // The source-limit preflight (varchar-overflow, integer-width, orphan-foreign-keys) runs inside the plan and again
+  // under the locks; time it alone over the same data so its cost is visible. Absent in a build that predates it.
+  const limits = await import('../dist/clone/value-limits.js').catch(() => undefined);
+  if (limits) {
+    const { openSnapshot } = await import('../dist/clone/source.js');
+    const { readForeignKeys } = await import('../dist/clone/catalog.js');
+    const { introspectPostgres } = await import('../dist/codecs/introspect.js');
+    const probe = new pg.Client({ connectionString: url });
+    await probe.connect();
+    const postgres = await introspectPostgres(probe, 'public');
+    const oids = (await probe.query("select oid::int as oid from pg_class where relname like 'perf\\_%' and relkind = 'r'")).rows.map((row) => row.oid);
+    const foreignKeys = await readForeignKeys(probe, oids, 160000);
+    await probe.end();
+    const snapshot = openSnapshot(livePath);
+    started = t();
+    const refusals = limits.sourceLimitRefusals(snapshot, manifest, postgres, foreignKeys);
+    snapshot.close();
+    console.log(`source-limit preflight scan alone ${secs(started)}s over ${foreignKeys.length} foreign keys, refusals=${refusals.length} (runs twice per clone: plan and under the locks)`);
+  }
+
   started = t();
   const result = await executeClone({
     ...options,

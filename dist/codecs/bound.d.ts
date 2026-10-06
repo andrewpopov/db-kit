@@ -1,5 +1,5 @@
 import { type Dialect, type PgValue, type SqliteValue } from './implementations.js';
-import type { CodecManifest, ColumnSpec } from './manifest.js';
+import { type CodecManifest, type ColumnSpec } from './manifest.js';
 /** One declared column: a codec plus its table.column identity, NULL rule and generated flag. */
 export interface ColumnCodec {
     readonly table: string;

@@ -6,6 +6,8 @@ export interface IntrospectedColumn {
   /** SQLite: the declared type text (may be empty). Postgres: `information_schema` `data_type`. */
   type: string;
   generated: boolean;
+  /** Postgres only: `character_maximum_length` of a `character varying(n)` / `character(n)` column; absent when unbounded. */
+  maxLength?: number;
 }
 
 /** Table name -> columns in declaration order. */
@@ -45,6 +47,7 @@ interface PostgresColumnRow {
   column_name: string | null;
   data_type: string | null;
   is_generated: string | null;
+  character_maximum_length: number | null;
 }
 
 /** A `pg.Pool` or a single `pg.Client`: introspection only reads. */
@@ -55,7 +58,7 @@ export interface PostgresQueryable {
 /** Base tables of one schema (default `public`), zero-column tables included. A column is generated when `is_generated = 'ALWAYS'`; identity columns are not. */
 export async function introspectPostgres(pool: PostgresQueryable, schema = 'public'): Promise<IntrospectedSchema> {
   const { rows } = await pool.query<PostgresColumnRow>(
-    `select t.table_name, c.column_name, c.data_type, c.is_generated
+    `select t.table_name, c.column_name, c.data_type, c.is_generated, c.character_maximum_length
        from information_schema.tables t
        left join information_schema.columns c on c.table_schema = t.table_schema and c.table_name = t.table_name
       where t.table_schema = $1 and t.table_type = 'BASE TABLE'
@@ -67,7 +70,7 @@ export async function introspectPostgres(pool: PostgresQueryable, schema = 'publ
     const columns = tables.get(row.table_name) ?? [];
     tables.set(row.table_name, columns);
     if (row.column_name === null || row.data_type === null) continue;
-    columns.push({ name: row.column_name, type: row.data_type, generated: row.is_generated === 'ALWAYS' });
+    columns.push({ name: row.column_name, type: row.data_type, generated: row.is_generated === 'ALWAYS', ...(row.character_maximum_length === null ? {} : { maxLength: row.character_maximum_length }) });
   }
   return tables;
 }

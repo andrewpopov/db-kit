@@ -5,6 +5,8 @@ export interface IntrospectedColumn {
     /** SQLite: the declared type text (may be empty). Postgres: `information_schema` `data_type`. */
     type: string;
     generated: boolean;
+    /** Postgres only: `character_maximum_length` of a `character varying(n)` / `character(n)` column; absent when unbounded. */
+    maxLength?: number;
 }
 /** Table name -> columns in declaration order. */
 export type IntrospectedSchema = ReadonlyMap<string, readonly IntrospectedColumn[]>;
