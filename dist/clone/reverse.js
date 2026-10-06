@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { closeSync, createReadStream, fsyncSync, linkSync, lstatSync, openSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, createReadStream, fsyncSync, linkSync, lstatSync, openSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { buildCodecs } from '../codecs/bound.js';
@@ -8,9 +8,10 @@ import { validateManifest } from '../codecs/validate.js';
 import { quoteIdent, readIdentity, readTargetFacts, TARGET_SCHEMA } from './catalog.js';
 import { CloneRefusal, refuse, toRefusal } from './errors.js';
 import { postgresOrderBy, sqliteOrderBy } from './order.js';
-import { connectClient } from './plan.js';
+import { positiveInteger } from './options.js';
+import { connectClient, pinSession } from './plan.js';
 import { evaluateShape } from './rules.js';
-import { openSnapshot } from './source.js';
+import { openSnapshot, sqliteSkippedKeyRefusals } from './source.js';
 import { isProduction, productionConfirmation } from './topology.js';
 import { VERIFY_TYPES, verifyTable } from './verify.js';
 const seconds = (since) => (performance.now() - since) / 1000;
@@ -47,6 +48,7 @@ function fsyncPath(path) {
  * file next to the target, so a crash at any point leaves nothing at the target path. Only a `CloneRefusal` ever leaves.
  */
 export async function reverseClone(options) {
+    positiveInteger('fetchRows', options.fetchRows);
     try {
         return await runReverse(options);
     }
@@ -62,6 +64,7 @@ async function runReverse(options) {
     const target = resolve(options.toSqlitePath);
     if (exists(target))
         refuse({ code: 'sqlite-target-exists' });
+    refuseTargetDebris(target);
     const directory = dirname(target);
     try {
         if (!statSync(directory).isDirectory())
@@ -89,12 +92,16 @@ async function runReverse(options) {
         await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
         await client.query("SELECT pg_catalog.set_config('search_path', '', true)");
         await client.query('SET LOCAL row_security = off');
+        await pinSession(client);
         const identity = await readSourceIdentity(client, options);
         const validation = validateManifest(manifest, { sqlite: introspectSqlite(db), postgres: await introspectPostgres(client, TARGET_SCHEMA) });
         if (!validation.ok) {
             const issue = validation.issues[0];
             return refuse({ code: 'manifest-invalid', table: issue?.table, ...(issue?.column === undefined ? {} : { column: issue.column }), object: `${issue?.side}:${issue?.code}` });
         }
+        const skippedKeys = sqliteSkippedKeyRefusals(db, manifest, introspectSqlite(db));
+        if (skippedKeys[0])
+            return refuse(skippedKeys[0]);
         const facts = await readTargetFacts(client, Object.keys(manifest.tables), identity.serverVersionNum);
         const shape = evaluateShape(facts, manifest, { requireOwnership: false });
         if (shape[0])
@@ -172,10 +179,11 @@ async function runReverse(options) {
             totals: { rows: results.reduce((sum, result) => sum + result.rows, 0), seconds: seconds(started) },
         };
         if (options.dryRun === true)
-            return { outcome: 'dry-run', path: null, receiptPath: null, ...summary };
+            return { outcome: 'dry-run', path: null, receiptPath: null, ...summary, warnings: [] };
         const sqliteSha256 = await sha256File(temp);
         fsyncPath(temp);
         options.hooks?.beforeRename?.(temp, target);
+        refuseTargetDebris(target); // again: something may have appeared while we worked
         try {
             linkSync(temp, target); // fails if anything appeared at the path meanwhile: never clobbers
         }
@@ -184,25 +192,45 @@ async function runReverse(options) {
                 return refuse({ code: 'sqlite-target-exists' });
             return refuse({ code: 'sqlite-write-failed' });
         }
-        unlinkSync(temp);
-        fsyncPath(directory);
-        const receiptPath = `${target}.receipt.json`;
-        const receipt = {
-            version: 1,
-            direction: 'postgres-to-sqlite',
-            runId,
-            completedAt: new Date().toISOString(),
-            source: summary.source,
-            manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
-            sqlite: { path: target, bytes: statSync(target).size, sha256: sqliteSha256 },
-            tables: results.map(({ table, rows, sha256 }) => ({ table, rows, sha256 })),
-            sequences,
+        // From here the database IS in place. Nothing below may turn that into a refusal: failures become warnings.
+        const warnings = [];
+        const attempt = (warning, step) => {
+            try {
+                step();
+                return true;
+            }
+            catch {
+                warnings.push(warning);
+                return false;
+            }
         };
-        const receiptTemp = `${receiptPath}.tmp-${runId}`;
-        writeFileSync(receiptTemp, `${JSON.stringify(receipt, null, 2)}\n`);
-        fsyncPath(receiptTemp);
-        renameSync(receiptTemp, receiptPath);
-        return { outcome: 'written', path: target, receiptPath, ...summary };
+        attempt('hook-failed', () => options.hooks?.afterPublish?.(target));
+        attempt('temp-not-removed', () => unlinkSync(temp));
+        attempt('directory-fsync-failed', () => fsyncPath(directory));
+        const receiptPath = `${target}.receipt.json`;
+        const receiptWritten = attempt('receipt-not-written', () => {
+            const receipt = {
+                version: 1,
+                direction: 'postgres-to-sqlite',
+                runId,
+                completedAt: new Date().toISOString(),
+                source: summary.source,
+                manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
+                sqlite: { path: target, bytes: statSync(target).size, sha256: sqliteSha256 },
+                tables: results.map(({ table, rows, sha256 }) => ({ table, rows, sha256 })),
+                sequences,
+            };
+            const receiptTemp = `${receiptPath}.tmp-${runId}`;
+            try {
+                writeFileSync(receiptTemp, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
+                fsyncPath(receiptTemp);
+                linkSync(receiptTemp, receiptPath); // no-clobber, like the database
+            }
+            finally {
+                rmSync(receiptTemp, { force: true });
+            }
+        });
+        return { outcome: 'written', path: target, receiptPath: receiptWritten ? receiptPath : null, ...summary, warnings };
     }
     finally {
         if (client) {
@@ -215,7 +243,19 @@ async function runReverse(options) {
         catch {
             // the temp file is removed below
         }
-        removeTemp();
+        try {
+            removeTemp();
+        }
+        catch {
+            // best effort: after publication a stuck temp file is only a warning
+        }
+    }
+}
+/** Anything already at the target's neighbourhood that SQLite or we would trip over: a hot `-journal` would be replayed over the verified file, `-wal`/`-shm` adopted, a receipt silently replaced. */
+function refuseTargetDebris(target) {
+    for (const suffix of ['-journal', '-wal', '-shm', '.receipt.json']) {
+        if (exists(`${target}${suffix}`))
+            refuse({ code: 'sqlite-target-exists', object: suffix });
     }
 }
 function removeSidecars(temp) {

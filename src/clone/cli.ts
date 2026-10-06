@@ -5,6 +5,7 @@ import { parseCodecManifest, type CodecManifest } from '../codecs/manifest.js';
 import { parseDatabaseUrl } from '../url.js';
 import { CloneOutcomeError, CloneRefusal, describeRefusal, refuse, toRefusal } from './errors.js';
 import { executeClone } from './execute.js';
+import { nonNegativeNumber } from './options.js';
 import { reverseClone } from './reverse.js';
 import { planClone, type PlanOptions } from './plan.js';
 import { planToJson, planToText, resultToJson, resultToText, reverseToText } from './render.js';
@@ -31,9 +32,9 @@ const USAGE = `usage: db-kit clone --from-live <sqlite path> --manifest <file> -
 
 /**
  * Exit codes: 0 plan has no refusals / dry run verified / COMMITTED, 1 refused or failed with the target unchanged,
- * 2 usage error, 4 COMMIT ABORTED (nothing committed), 5 COMMIT outcome UNKNOWN (inspect the target; never re-run blindly).
+ * 2 usage error, 3 (reverse only) the SQLite file IS in place but a later step warned (see `warnings`), 4 COMMIT ABORTED (nothing committed), 5 COMMIT outcome UNKNOWN (inspect the target; never re-run blindly).
  */
-export async function runCloneCli(argv: readonly string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+export async function runCloneCli(argv: readonly string[], env: NodeJS.ProcessEnv, io: CliIo, deps: { reverseClone?: typeof reverseClone } = {}): Promise<number> {
   let values: ReturnType<typeof parseCommand>;
   try {
     values = parseCommand(argv);
@@ -41,7 +42,7 @@ export async function runCloneCli(argv: readonly string[], env: NodeJS.ProcessEn
     io.err(USAGE);
     return 2;
   }
-  if (values.reverse) return runReverse(values, env, io);
+  if (values.reverse) return runReverse(values, env, io, deps);
   if (!values['from-live'] || !values.manifest) {
     io.err(USAGE);
     return 2;
@@ -61,7 +62,7 @@ export async function runCloneCli(argv: readonly string[], env: NodeJS.ProcessEn
     const result = await executeClone({
       ...options,
       dryRun: values['dry-run'] === true,
-      ...(values['commit-poll-seconds'] === undefined ? {} : { commitPollMs: Math.max(0, Number(values['commit-poll-seconds'])) * 1000 }),
+      ...(values['commit-poll-seconds'] === undefined ? {} : { commitPollMs: pollMilliseconds(values['commit-poll-seconds']) }),
       onProgress: values.json ? undefined : (event) => io.err(`${event.phase} ${event.table}: ${event.rows} rows in ${event.seconds.toFixed(1)}s`),
     });
     io.out(values.json ? resultToJson(result) : resultToText(result));
@@ -78,7 +79,7 @@ export async function runCloneCli(argv: readonly string[], env: NodeJS.ProcessEn
   }
 }
 
-async function runReverse(values: ReturnType<typeof parseCommand>, env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+async function runReverse(values: ReturnType<typeof parseCommand>, env: NodeJS.ProcessEnv, io: CliIo, deps: { reverseClone?: typeof reverseClone }): Promise<number> {
   if (!values['to-sqlite'] || !values['sqlite-template'] || !values.manifest || values['plan-only'] || values.execute) {
     io.err(USAGE);
     return 2;
@@ -93,7 +94,7 @@ async function runReverse(values: ReturnType<typeof parseCommand>, env: NodeJS.P
       return refuseWith({ code: 'source-url-invalid' });
     }
     if (source.dialect !== 'postgres') return refuseWith({ code: 'source-not-postgres' });
-    const result = await reverseClone({
+    const result = await (deps.reverseClone ?? reverseClone)({
       source,
       manifest: loadManifest(values.manifest),
       toSqlitePath: values['to-sqlite'],
@@ -105,12 +106,23 @@ async function runReverse(values: ReturnType<typeof parseCommand>, env: NodeJS.P
       onProgress: values.json ? undefined : (event) => io.err(`${event.phase} ${event.table}: ${event.rows} rows in ${event.seconds.toFixed(1)}s`),
     });
     io.out(values.json ? JSON.stringify(result, null, 2) : reverseToText(result));
+    if (result.warnings.length > 0) {
+      if (!values.json) io.err(`PUBLISHED WITH WARNINGS: ${result.warnings.join(', ')}`);
+      return 3;
+    }
     return 0;
   } catch (error) {
     const refusal = error instanceof CloneRefusal ? error.refusal : toRefusal(error);
     io.err(values.json ? JSON.stringify({ ok: false, refusals: [refusal] }) : `REFUSED: ${describeRefusal(refusal)}`);
     return 1;
   }
+}
+
+/** `--commit-poll-seconds`: a finite number of seconds, never silently NaN (which would skip the wait) or negative. */
+function pollMilliseconds(text: string): number {
+  const seconds = text.trim() === '' ? Number.NaN : Number(text);
+  nonNegativeNumber('commit-poll-seconds', seconds);
+  return seconds * 1000;
 }
 
 const refuseWith = (refusal: Parameters<typeof refuse>[0]): never => refuse(refusal);

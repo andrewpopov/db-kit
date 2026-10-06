@@ -20,6 +20,11 @@ export declare function openSnapshot(path: string): Database.Database;
  * Tables or columns missing from the snapshot are left to manifest validation.
  */
 export declare function scanSource(db: Database.Database, manifest: CodecManifest, schema: IntrospectedSchema): SourceFacts;
+/**
+ * Foreign keys the SQLite schema itself declares between a copied table and a `copy: false` one, in either direction:
+ * Postgres may not have that key, but the relationship would still dangle once one side is never copied.
+ */
+export declare function sqliteSkippedKeyRefusals(db: Database.Database, manifest: CodecManifest, schema: IntrospectedSchema): Refusal[];
 export interface SequenceSourceFacts {
     /** max and min of the column over the snapshot; null for an empty table. */
     highest: bigint | null;

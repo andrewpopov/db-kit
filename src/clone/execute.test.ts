@@ -143,6 +143,38 @@ describe('executeClone: a round trip over sides that deliberately differ', () =>
   });
 });
 
+describe('executeClone: review follow-ups (session pins, options, SQLite-side keys)', () => {
+  it('database defaults of bytea_output=escape and extra_float_digits=0 cannot make verification fail or lie', async () => {
+    const manifest = manifestOf({ version: 1, tables: { m: table({ id: int, raw: { codec: 'blob', nullable: false }, r: { codec: 'real', nullable: false } }) } });
+    const db = await create(['create table m(id bigint primary key, raw bytea not null, r double precision not null)', "alter database {db} set bytea_output = 'escape'", 'alter database {db} set extra_float_digits = 0']);
+    const live = liveSqlite(dir, ['create table m(id integer primary key, raw blob not null, r real not null)', "insert into m values (1, x'68656c6c6f', 0.30000000000000004), (2, x'00ff5c', 1.2345678901234567)"]);
+    expect((await executeClone(options(db, live, manifest))).outcome).toBe('committed');
+    expect((await db.admin.query("select encode(raw, 'hex') as h, r::text from m order by id")).rows).toEqual([
+      { h: '68656c6c6f', r: '0.30000000000000004' },
+      { h: '00ff5c', r: '1.2345678901234567' },
+    ]);
+  });
+
+  it('refuses non-positive or non-integer numeric options instead of "verifying" nothing', async () => {
+    const db = await create(SMALL_DDL);
+    const live = SMALL_LIVE();
+    const bad: [string, number | bigint][] = [['fetchRows', 0], ['fetchRows', -1], ['fetchRows', 2.5], ['batchBytes', 0], ['batchBytes', Number.NaN], ['lockTimeoutMs', 0], ['lockTimeoutMs', -3], ['commitPollMs', -1], ['commitPollMs', Number.NaN], ['maxSlotRetentionBytes', -1n]];
+    for (const [name, value] of bad) {
+      expect(await refusalOf(() => executeClone(options(db, live, SMALL_MANIFEST, { [name]: value } as Partial<ExecuteOptions>))), `${name}=${String(value)}`).toEqual({ code: 'invalid-option', object: name });
+    }
+    expect(((await db.admin.query('select count(*)::int as n from parent')).rows[0] as { n: number }).n).toBe(0);
+  });
+
+  it('a SQLite foreign key to or from a copy:false table is refused even when Postgres has no such key', async () => {
+    const manifest = manifestOf({ version: 1, tables: { items: table({ id: int, name: text, l: nullableInt }), ledger: { copy: false, reason: 'ledger' } } });
+    const db = await create(['create table items(id bigint primary key, name text not null, l bigint)', 'create table ledger(id bigint primary key)']);
+    const toLedger = liveSqlite(dir, ['create table ledger(id integer primary key)', 'create table items(id integer primary key, name text not null, l integer references ledger(id))']);
+    expect(await refusalOf(() => executeClone(options(db, toLedger, manifest)))).toMatchObject({ code: 'foreign-key-to-skipped-table', table: 'items' });
+    const fromLedger = liveSqlite(dir, ['create table items(id integer primary key, name text not null, l integer)', 'create table ledger(id integer primary key, item integer references items(id))']);
+    expect(await refusalOf(() => executeClone(options(db, fromLedger, manifest)))).toMatchObject({ code: 'foreign-key-to-skipped-table', table: 'items' });
+  });
+});
+
 describe('executeClone: copy:false tables', () => {
   it('never copies, verifies, counts or truncates a skipped ledger: its rows on both sides stay exactly where they are', async () => {
     const manifest = manifestOf({ version: 1, tables: { items: table({ id: int, name: text }), _ledger: { copy: false, reason: 'migration ledger' } } });

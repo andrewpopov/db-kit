@@ -15,7 +15,7 @@ import { runCloneCli, SOURCE_URL_ENV } from './cli.js';
 import { CloneRefusal, type Refusal } from './errors.js';
 import { executeClone } from './execute.js';
 import { sqliteOrderBy } from './order.js';
-import { reverseClone, type ReverseOptions } from './reverse.js';
+import { reverseClone, type ReverseOptions, type ReverseResult } from './reverse.js';
 import { openSnapshot } from './source.js';
 import { encodeRow } from './verify.js';
 
@@ -268,6 +268,111 @@ describe('reverseClone: refusals leave nothing at the target path', () => {
   });
 });
 
+describe('reverseClone: review follow-ups', () => {
+  it('database defaults of bytea_output=escape and extra_float_digits=0 cannot corrupt a blob or round a float (the session pins both)', async () => {
+    const manifest = manifestOf({ version: 1, tables: { m: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, raw: { codec: 'blob', nullable: false }, r: { codec: 'real', nullable: false } } } } });
+    const db = await create([
+      'create table m(id bigint primary key, raw bytea not null, r double precision not null)',
+      "insert into m values (1, decode('68656c6c6f', 'hex'), 0.30000000000000004), (2, decode('00ff5c', 'hex'), 1.2345678901234567)",
+      "alter database {db} set bytea_output = 'escape'",
+      'alter database {db} set extra_float_digits = 0',
+    ]);
+    const opts = options(db, manifest, liveSqlite(dir, ['create table m(id integer primary key, raw blob not null, r real not null)']));
+    await reverseClone(opts);
+    const check = new Database(opts.toSqlitePath, { readonly: true });
+    expect(check.prepare('select hex(raw) as h, r from m order by id').all()).toEqual([
+      { h: '68656C6C6F', r: 0.30000000000000004 },
+      { h: '00FF5C', r: 1.2345678901234567 },
+    ]);
+    check.close();
+  });
+
+  it('the verification bytea parser accepts only hex output: an escape-format value is an error, never an empty blob', async () => {
+    const { VERIFY_TYPES } = await import('./verify.js');
+    const parse = VERIFY_TYPES.getTypeParser(17, 'text') as (text: string) => unknown;
+    expect(parse('\\x00ff')).toEqual(Buffer.from([0, 255]));
+    expect(parse('\\x')).toEqual(Buffer.alloc(0));
+    expect(() => parse('hello')).toThrow(CloneRefusal);
+    expect(() => parse('\\000\\377')).toThrow(CloneRefusal);
+  });
+
+  it('refuses a non-positive or non-integer fetchRows (FETCH FORWARD 0 would "verify" empty tables) and other bad options', async () => {
+    const db = await create(ITEMS_PG);
+    const template = itemsTemplate();
+    for (const fetchRows of [0, -5, 1.5, Number.NaN]) {
+      const opts = options(db, ITEMS, template, { fetchRows });
+      expect(await refusalOf(() => reverseClone(opts)), String(fetchRows)).toEqual({ code: 'invalid-option', object: 'fetchRows' });
+      expect(files(opts.toSqlitePath)).toEqual([]);
+    }
+  });
+
+  it('refuses a target whose sidecars exist (a hot journal would be replayed over the verified file), before the load and again at link time', async () => {
+    const db = await create(ITEMS_PG);
+    const template = itemsTemplate();
+    for (const suffix of ['-journal', '-wal', '-shm']) {
+      let loaded = false;
+      const opts = options(db, ITEMS, template, { hooks: { afterLoad: () => void (loaded = true) } });
+      writeFileSync(`${opts.toSqlitePath}${suffix}`, 'stale');
+      expect(await refusalOf(() => reverseClone(opts)), suffix).toEqual({ code: 'sqlite-target-exists', object: suffix });
+      expect(loaded, `${suffix}: refused before any row was loaded`).toBe(false);
+      expect(files(opts.toSqlitePath)).toEqual([`app.db${suffix}`]);
+    }
+    for (const suffix of ['-journal', '-wal', '-shm']) {
+      const opts = options(db, ITEMS, template, { hooks: { beforeRename: (_temp, target) => writeFileSync(`${target}${suffix}`, 'appeared meanwhile') } });
+      expect(await refusalOf(() => reverseClone(opts)), suffix).toEqual({ code: 'sqlite-target-exists', object: suffix });
+      expect(existsSync(opts.toSqlitePath)).toBe(false);
+    }
+  });
+
+  it('never replaces an existing receipt file: refused up front, and again just before publishing', async () => {
+    const db = await create(ITEMS_PG);
+    const template = itemsTemplate();
+    const early = options(db, ITEMS, template);
+    writeFileSync(`${early.toSqlitePath}.receipt.json`, 'old receipt');
+    expect(await refusalOf(() => reverseClone(early))).toEqual({ code: 'sqlite-target-exists', object: '.receipt.json' });
+    expect(readFileSync(`${early.toSqlitePath}.receipt.json`, 'utf8')).toBe('old receipt');
+    expect(existsSync(early.toSqlitePath)).toBe(false);
+    const late = options(db, ITEMS, template, { hooks: { beforeRename: (_temp, target) => writeFileSync(`${target}.receipt.json`, 'appeared meanwhile') } });
+    expect(await refusalOf(() => reverseClone(late))).toEqual({ code: 'sqlite-target-exists', object: '.receipt.json' });
+    expect(existsSync(late.toSqlitePath)).toBe(false);
+    expect(readFileSync(`${late.toSqlitePath}.receipt.json`, 'utf8')).toBe('appeared meanwhile');
+  });
+
+  it('a receipt that appears after the database was published is not replaced either: the database stays, with a warning', async () => {
+    const db = await create(ITEMS_PG);
+    const opts = options(db, ITEMS, itemsTemplate(), { hooks: { afterPublish: (target) => writeFileSync(`${target}.receipt.json`, 'appeared after publish') } });
+    const result = await reverseClone(opts);
+    expect(result.outcome).toBe('written');
+    expect(result.warnings).toEqual(['receipt-not-written']);
+    expect(readFileSync(`${opts.toSqlitePath}.receipt.json`, 'utf8')).toBe('appeared after publish');
+    expect(existsSync(opts.toSqlitePath)).toBe(true);
+  });
+
+  it('a failure after the file is in place is PUBLISHED with warnings, not a refusal: the database is there', async () => {
+    const db = await create(ITEMS_PG);
+    const opts = options(db, ITEMS, itemsTemplate(), { hooks: { afterPublish: (target) => chmodSync(dirname(target), 0o500) } });
+    try {
+      const result = await reverseClone(opts);
+      expect(result.outcome).toBe('written');
+      expect(result.path).toBe(opts.toSqlitePath);
+      expect(result.receiptPath).toBeNull();
+      expect(result.warnings).toEqual(expect.arrayContaining(['receipt-not-written']));
+      expect(existsSync(opts.toSqlitePath)).toBe(true);
+    } finally {
+      chmodSync(dirname(opts.toSqlitePath), 0o700);
+    }
+  });
+
+  it('a SQLite foreign key to a copy:false table, in either direction, is refused', async () => {
+    const manifest = manifestOf({ version: 1, tables: { items: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, name: { codec: 'text', nullable: false }, l: { codec: 'integer', nullable: true } } }, ledger: { copy: false, reason: 'ledger' } } });
+    const db = await create(['create table items(id bigint primary key, name text not null, l bigint)', 'create table ledger(id bigint primary key)']);
+    const toLedger = liveSqlite(dir, ['create table ledger(id integer primary key)', 'create table items(id integer primary key, name text not null, l integer references ledger(id))']);
+    expect(await refusalOf(() => reverseClone(options(db, manifest, toLedger)))).toMatchObject({ code: 'foreign-key-to-skipped-table', table: 'items' });
+    const fromLedger = liveSqlite(dir, ['create table items(id integer primary key, name text not null, l integer)', 'create table ledger(id integer primary key, item integer references items(id))']);
+    expect(await refusalOf(() => reverseClone(options(db, manifest, fromLedger)))).toMatchObject({ code: 'foreign-key-to-skipped-table', table: 'items' });
+  });
+});
+
 describe('reverseClone: a killed process', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
   it('SIGKILLed mid-clone leaves no file at the target path (only a hidden temp), and the next run still works', async () => {
@@ -311,6 +416,28 @@ describe('db-kit clone --reverse', () => {
     writeFileSync(path, JSON.stringify({ version: 1, tables: { items: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, name: { codec: 'text', nullable: false } } } } }));
     return path;
   };
+
+  it('exits 3 and says PUBLISHED when the file is in place but a later step warned (the engine is stubbed: the CLI has no failure hook)', async () => {
+    let out = '';
+    let err = '';
+    const result: ReverseResult = { outcome: 'written', runId: 'r', path: '/x/app.db', receiptPath: null, source: { host: 'h', port: 1, database: 'd', systemIdentifier: '1', serverVersion: '17' }, tables: [], sequences: [], totals: { rows: 0, seconds: 0 }, warnings: ['receipt-not-written'] };
+    const db = await create(ITEMS_PG);
+    const args = ['--reverse', '--to-sqlite', '/x/app.db', '--sqlite-template', 'ignored', '--manifest', manifestFile(), '--writers-stopped'];
+    const code = await runCloneCli(args, { [SOURCE_URL_ENV]: postgresUrl(db.config) }, { out: (t) => void (out += t), err: (t) => void (err += t) }, { reverseClone: async () => result });
+    expect(code).toBe(3);
+    expect(out).toContain('WRITTEN /x/app.db');
+    expect(err).toContain('PUBLISHED WITH WARNINGS: receipt-not-written');
+    const clean = await runCloneCli(args, { [SOURCE_URL_ENV]: postgresUrl(db.config) }, { out: () => undefined, err: () => undefined }, { reverseClone: async () => ({ ...result, warnings: [] }) });
+    expect(clean).toBe(0);
+  });
+
+  it('refuses a non-numeric --commit-poll-seconds instead of treating it as zero', async () => {
+    const db = await create(['create table items(id bigint primary key, name text not null)']);
+    let err = '';
+    const result = await runCloneCli(['--from-live', itemsTemplate(), '--manifest', manifestFile(), '--writers-stopped', '--dry-run', '--commit-poll-seconds', 'abc', '--confirm-production', confirmationOf(db)], { DB_KIT_TARGET_URL: postgresUrl(db.config) }, { out: () => undefined, err: (t) => void (err += t) });
+    expect(result).toBe(1);
+    expect(err).toContain('invalid-option (commit-poll-seconds)');
+  });
 
   it('writes the file and exits 0; --dry-run exits 0 writing nothing; refusals exit 1; usage errors exit 2; the URL comes from DB_KIT_SOURCE_URL only', async () => {
     const db = await create(ITEMS_PG);

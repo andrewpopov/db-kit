@@ -29,6 +29,8 @@ export interface ReverseOptions {
         /** Runs on the finished temp file just before it is verified. */
         beforeVerify?: (tempPath: string) => void;
         beforeRename?: (tempPath: string, targetPath: string) => void;
+        /** Runs right after the file is linked into place. */
+        afterPublish?: (targetPath: string) => void;
     };
 }
 export interface ReverseTableResult {
@@ -61,6 +63,8 @@ export interface ReverseResult {
         rows: number;
         seconds: number;
     };
+    /** Steps that failed AFTER the file was published (the database is in place): `temp-not-removed`, `directory-fsync-failed`, `receipt-not-written`. Empty when everything finished. */
+    warnings: string[];
 }
 /**
  * Clone Postgres into a FRESH SQLite file, the rollback-window path: writers stopped and drained, one REPEATABLE READ

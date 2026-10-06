@@ -72,6 +72,8 @@ export const CLONE_REFUSAL_CODES = [
     'sqlite-foreign-key-violation',
     'sqlite-integrity-failed',
     'sqlite-write-failed',
+    'invalid-option',
+    'unexpected-value-format',
     // execution
     'lock-timeout',
     'load-failed',
