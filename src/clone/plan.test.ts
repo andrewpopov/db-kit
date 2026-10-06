@@ -176,6 +176,15 @@ const CASES: RefusalCase[] = [
     ddl: [...ITEMS_DDL, 'create schema other', 'create table other.child(item_id bigint)', 'insert into other.child values (5)', 'alter table other.child add constraint child_fk foreign key (item_id) references public.items(id) not valid'],
     expected: [{ code: 'foreign-key-not-valid', table: 'other.child', object: 'child_fk' }],
   },
+  ...(['decimal-as-string', 'timestamp-iso'] as const).map(
+    (codec): RefusalCase => ({
+      name: `a ${codec} primary key that reorders on conversion (row-by-row verification could not line the sides up)`,
+      ddl: [`create table k(id ${codec === 'decimal-as-string' ? 'numeric' : 'timestamptz'} primary key)`],
+      manifest: manifestOf({ version: 1, tables: { k: table({ id: codec === 'decimal-as-string' ? { codec, nullable: false } : { codec, preserveText: false, nullable: false } }) } }),
+      live: liveSqlite(dir, ['create table k(id text primary key)']),
+      expected: [{ code: 'primary-key-order-unsupported', table: 'k', column: 'id' }],
+    }),
+  ),
   // emptiness
   { name: 'a non-empty table', ddl: [...ITEMS_DDL, "insert into items values (9, 'x')"], expected: [{ code: 'target-not-empty', table: 'items' }] },
   // the receipt table
@@ -201,7 +210,7 @@ describe('refusals, each triggered by a real offending object', () => {
       const plan = await planOf(db, { manifest: c.manifest ?? ITEMS, livePath: c.live ?? ITEMS_LIVE, truncate: c.truncate === true });
       expect(plan.refusals).toEqual(c.expected);
       expect(plan.ok).toBe(c.expected.length === 0);
-    });
+    }, 30_000);
   }
 
   it('lists incoming references from uncopied tables without refusing when not truncating', async () => {

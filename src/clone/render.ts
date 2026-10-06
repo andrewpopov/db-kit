@@ -1,4 +1,5 @@
 import { describeRefusal } from './errors.js';
+import type { CloneResult } from './execute.js';
 import type { ClonePlan } from './plan.js';
 
 /** The plan as JSON. 64-bit values (sequence bounds, restart values) are strings: JSON numbers cannot carry them. */
@@ -33,5 +34,19 @@ export function planToText(plan: ClonePlan): string {
   }
   lines.push(plan.ok ? 'plan OK: no refusals' : `REFUSED (${plan.refusals.length}):`);
   for (const refusal of plan.refusals) lines.push(`  ${describeRefusal(refusal)}`);
+  return lines.join('\n');
+}
+
+export function resultToJson(result: CloneResult): string {
+  return JSON.stringify(result, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value), 2);
+}
+
+export function resultToText(result: CloneResult): string {
+  const lines = [`${result.outcome === 'committed' ? 'COMMITTED' : 'DRY RUN (rolled back)'} run ${result.runId}`];
+  for (const table of result.tables) {
+    lines.push(`  ${table.table}: ${table.rows} rows, load ${table.loadSeconds.toFixed(1)}s (${Math.round(table.rowsPerSecond)} rows/s), verify ${table.verifySeconds.toFixed(1)}s, sha256 ${table.sha256}`);
+  }
+  lines.push(`total ${result.totals.rows} rows in ${result.totals.seconds.toFixed(1)}s`);
+  if (result.commit) lines.push(`transaction ${result.commit.transactionId}${result.commit.acknowledged ? '' : ' (COMMIT reply was lost; confirmed through txid_status)'}`);
   return lines.join('\n');
 }

@@ -25,6 +25,12 @@ export interface GateResult {
   sequences: OwnedSequence[];
 }
 
+/** A primary-key column whose order differs between SQLite text and the Postgres type it converts to, so row-by-row verification cannot line the two sides up. */
+function reordersOnConversion(spec: CodecManifest['tables'][string]['columns'][string] | undefined): boolean {
+  if (!spec) return false;
+  return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && !spec.preserveText);
+}
+
 const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((value, index) => value === b[index]);
 
 /** Turn catalog facts into refusals: the schema gate, capabilities, emptiness and operational checks of PKG-177 D5-D10 and A1/A3-A5/A7. */
@@ -40,6 +46,9 @@ export function evaluateGate(facts: TargetFacts, manifest: CodecManifest, option
     if (!table.isOwner) refuse({ code: 'not-owner', table: table.name });
     const spec = Object.hasOwn(manifest.tables, table.name) ? manifest.tables[table.name] : undefined;
     if (spec && !sameList(facts.primaryKeys.get(table.name) ?? [], spec.primaryKey)) refuse({ code: 'primary-key-mismatch', table: table.name });
+    for (const name of spec?.primaryKey ?? []) {
+      if (reordersOnConversion(spec?.columns[name])) refuse({ code: 'primary-key-order-unsupported', table: table.name, column: name });
+    }
   }
 
   for (const column of facts.columns) {

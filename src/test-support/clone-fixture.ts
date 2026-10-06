@@ -35,12 +35,16 @@ export interface TargetDatabase {
 }
 
 /** Create a fresh database on the throwaway server, run `ddl` in it as the superuser (`{db}` is replaced by its name), and connect. */
-export async function targetDatabase(server: ThrowawayPostgres, ddl: readonly string[]): Promise<TargetDatabase> {
+/** `locale` is the tail of CREATE DATABASE (for example `locale_provider icu icu_locale 'en-US'`), so a test can leave the server's C collation. */
+export async function targetDatabase(server: ThrowawayPostgres, ddl: readonly string[], locale?: string): Promise<TargetDatabase> {
   const name = `clone_t${++counter}`;
   const root = new Client({ ...server.config, ssl: false });
   await root.connect();
-  await root.query(`create database ${name}`);
-  await root.end();
+  try {
+    await root.query(locale === undefined ? `create database ${name}` : `create database ${name} template template0 encoding 'UTF8' ${locale}`);
+  } finally {
+    await root.end();
+  }
   const config: PostgresConfig = { ...server.config, database: name };
   const admin = new Client({ host: config.host, port: config.port, user: config.user, password: config.password, database: name, ssl: false });
   admin.on('error', () => undefined); // the server may be stopped under an idle admin connection

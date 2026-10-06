@@ -127,3 +127,5 @@ export declare function readIdentity(client: PostgresQueryable): Promise<TargetI
  * schema-qualified names, no `information_schema`. Pure reads; the caller runs them in a READ ONLY transaction.
  */
 export declare function readTargetFacts(client: PostgresQueryable, tableNames: readonly string[], versionNum: number): Promise<TargetFacts>;
+/** Every foreign key owned by or pointing at one of `oids`, with the catalog fields A1 compares. */
+export declare function readForeignKeys(client: PostgresQueryable, oids: readonly number[], versionNum: number): Promise<ForeignKeyFact[]>;

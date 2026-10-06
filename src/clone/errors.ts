@@ -31,6 +31,7 @@ export const CLONE_REFUSAL_CODES = [
   // schema gate
   'manifest-invalid',
   'primary-key-mismatch',
+  'primary-key-order-unsupported',
   'nullability-mismatch',
   'partitioned-table',
   'inherited-table',
@@ -57,6 +58,13 @@ export const CLONE_REFUSAL_CODES = [
   'archiver-failing',
   'replication-slot-lag',
   'preflight-failed',
+  // execution
+  'lock-timeout',
+  'load-failed',
+  'verification-mismatch',
+  'foreign-keys-changed',
+  'commit-failed',
+  'execute-failed',
 ] as const;
 
 export type CloneRefusalCode = (typeof CLONE_REFUSAL_CODES)[number];
@@ -100,4 +108,22 @@ export function toRefusal(error: unknown, fallback: CloneRefusalCode = 'prefligh
 
 export function refuse(refusal: Refusal): never {
   throw new CloneRefusal(refusal);
+}
+
+/**
+ * The COMMIT's fate when its acknowledgement was lost or it failed: `aborted` (nothing was committed, the target is
+ * unchanged) or `unknown` (could not be established: inspect the target, never retry blindly).
+ */
+export class CloneOutcomeError extends DbKitError {
+  readonly outcome: 'aborted' | 'unknown';
+  readonly runId: string;
+  readonly transactionId: string | null;
+
+  constructor(outcome: 'aborted' | 'unknown', runId: string, transactionId: string | null) {
+    super('CLONE_OUTCOME', `commit ${outcome} (run ${runId})`);
+    this.name = 'CloneOutcomeError';
+    this.outcome = outcome;
+    this.runId = runId;
+    this.transactionId = transactionId;
+  }
 }

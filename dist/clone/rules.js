@@ -1,6 +1,12 @@
 import { RECEIPT_COLUMNS, RECEIPT_PRIMARY_KEY, RECEIPT_SCHEMA, RECEIPT_TABLE, TARGET_SCHEMA } from './catalog.js';
 const RECEIPT_REFUSAL = { code: 'receipt-table-invalid', table: `${RECEIPT_SCHEMA}.${RECEIPT_TABLE}` };
 export const DEFAULT_MAX_SLOT_RETENTION_BYTES = 5n * 1024n ** 3n;
+/** A primary-key column whose order differs between SQLite text and the Postgres type it converts to, so row-by-row verification cannot line the two sides up. */
+function reordersOnConversion(spec) {
+    if (!spec)
+        return false;
+    return spec.codec === 'decimal-as-string' || (spec.codec === 'timestamp-iso' && !spec.preserveText) || (spec.codec === 'json-text' && !spec.preserveText);
+}
 const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
 /** Turn catalog facts into refusals: the schema gate, capabilities, emptiness and operational checks of PKG-177 D5-D10 and A1/A3-A5/A7. */
 export function evaluateGate(facts, manifest, options) {
@@ -19,6 +25,10 @@ export function evaluateGate(facts, manifest, options) {
         const spec = Object.hasOwn(manifest.tables, table.name) ? manifest.tables[table.name] : undefined;
         if (spec && !sameList(facts.primaryKeys.get(table.name) ?? [], spec.primaryKey))
             refuse({ code: 'primary-key-mismatch', table: table.name });
+        for (const name of spec?.primaryKey ?? []) {
+            if (reordersOnConversion(spec?.columns[name]))
+                refuse({ code: 'primary-key-order-unsupported', table: table.name, column: name });
+        }
     }
     for (const column of facts.columns) {
         const spec = Object.hasOwn(manifest.tables, column.table) ? manifest.tables[column.table]?.columns[column.column] : undefined;

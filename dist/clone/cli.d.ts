@@ -4,5 +4,8 @@ export interface CliIo {
     out(text: string): void;
     err(text: string): void;
 }
-/** Exit codes: 0 plan has no refusals, 1 refused, 2 usage error or an operation this build does not do yet. */
+/**
+ * Exit codes: 0 plan has no refusals / dry run verified / COMMITTED, 1 refused or failed with the target unchanged,
+ * 2 usage error, 4 COMMIT ABORTED (nothing committed), 5 COMMIT outcome UNKNOWN (inspect the target; never re-run blindly).
+ */
 export declare function runCloneCli(argv: readonly string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number>;
