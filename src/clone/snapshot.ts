@@ -4,15 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSqliteSnapshot } from '@andrewpopov/db-backup';
 import Database from 'better-sqlite3';
-import { refuse } from './errors.js';
+import { CloneRefusal, refuse } from './errors.js';
 
-/** Size and modification time (ns) of one file; `null` when it does not exist. */
-export type FileStamp = { size: bigint; mtimeNs: bigint } | null;
-
+/**
+ * What our own reads cannot disturb: the main file's size, mtime and sha256, and the `-wal` size (absent and empty
+ * are the same, `0n`). `-shm` is ignored on purpose: every reader of a WAL database touches it.
+ */
 export interface LiveStamp {
-  main: FileStamp;
-  wal: FileStamp;
-  shm: FileStamp;
+  main: { size: bigint; mtimeNs: bigint; sha256: string };
+  walBytes: bigint;
 }
 
 export interface Snapshot {
@@ -34,30 +34,59 @@ export interface SnapshotOptions {
   createSnapshotFile?: (source: string, destination: string) => void;
 }
 
-function stamp(path: string): FileStamp {
+function sizeOf(path: string): bigint | null {
   try {
-    const stats = statSync(path, { bigint: true });
-    return { size: stats.size, mtimeNs: stats.mtimeNs };
+    return statSync(path, { bigint: true }).size;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     return refuse({ code: 'snapshot-failed' });
   }
 }
 
-export function stampLive(livePath: string): LiveStamp {
-  return { main: stamp(livePath), wal: stamp(`${livePath}-wal`), shm: stamp(`${livePath}-shm`) };
+export async function stampLive(livePath: string): Promise<LiveStamp> {
+  let stats;
+  try {
+    stats = statSync(livePath, { bigint: true });
+  } catch {
+    return refuse({ code: 'live-database-missing' });
+  }
+  return { main: { size: stats.size, mtimeNs: stats.mtimeNs, sha256: await sha256Of(livePath) }, walBytes: sizeOf(`${livePath}-wal`) ?? 0n };
 }
 
-const sameStamp = (a: FileStamp, b: FileStamp): boolean => (a === null || b === null ? a === b : a.size === b.size && a.mtimeNs === b.mtimeNs);
-
 export function liveUnchanged(before: LiveStamp, after: LiveStamp): boolean {
-  return sameStamp(before.main, after.main) && sameStamp(before.wal, after.wal) && sameStamp(before.shm, after.shm);
+  return (
+    before.main.size === after.main.size && before.main.mtimeNs === after.main.mtimeNs && before.main.sha256 === after.main.sha256 && before.walBytes === after.walBytes
+  );
 }
 
 async function sha256Of(path: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
   return hash.digest('hex');
+}
+
+/**
+ * With writers stopped, fold the live `-wal` into the main file and empty it, so the change evidence is stable
+ * against our own reads. A reader or writer still holding the database (`busy`) or a `-wal` that is not empty
+ * afterwards means somebody is not stopped: refuse. A database that is not in WAL mode reports busy=0, log=-1.
+ */
+function checkpointLive(livePath: string): void {
+  let db: Database.Database;
+  try {
+    db = new Database(livePath, { fileMustExist: true, timeout: 2000 });
+  } catch {
+    return refuse({ code: 'live-checkpoint-blocked' });
+  }
+  try {
+    const [row] = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[];
+    if (row?.busy !== 0) refuse({ code: 'live-checkpoint-blocked' });
+  } catch (error) {
+    if (error instanceof CloneRefusal) throw error;
+    return refuse({ code: 'live-checkpoint-blocked' });
+  } finally {
+    db.close();
+  }
+  if ((sizeOf(`${livePath}-wal`) ?? 0n) !== 0n) refuse({ code: 'live-checkpoint-blocked' });
 }
 
 /** `PRAGMA integrity_check`, `foreign_key_check` and `encoding` on the snapshot, read-only. Refuses on the first failure. */
@@ -97,8 +126,9 @@ const defaultSnapshotFile = (source: string, destination: string): void => {
  */
 export async function takeSnapshot(options: SnapshotOptions): Promise<Snapshot> {
   if (options.writersStopped !== true) refuse({ code: 'writers-not-stopped' });
-  const liveBefore = stampLive(options.livePath);
-  if (liveBefore.main === null) refuse({ code: 'live-database-missing' });
+  if (sizeOf(options.livePath) === null) refuse({ code: 'live-database-missing' });
+  checkpointLive(options.livePath);
+  const liveBefore = await stampLive(options.livePath);
 
   const dir = mkdtempSync(join(tmpdir(), 'db-kit-clone-'));
   const dispose = (): void => rmSync(dir, { recursive: true, force: true });
@@ -110,7 +140,7 @@ export async function takeSnapshot(options: SnapshotOptions): Promise<Snapshot> 
     } catch {
       return refuse({ code: 'snapshot-failed' });
     }
-    const liveAfter = stampLive(options.livePath);
+    const liveAfter = await stampLive(options.livePath);
     if (!liveUnchanged(liveBefore, liveAfter)) refuse({ code: 'live-changed-during-snapshot' });
     const sha256 = await sha256Of(path);
     checkSnapshot(path);

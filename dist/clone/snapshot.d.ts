@@ -1,12 +1,14 @@
-/** Size and modification time (ns) of one file; `null` when it does not exist. */
-export type FileStamp = {
-    size: bigint;
-    mtimeNs: bigint;
-} | null;
+/**
+ * What our own reads cannot disturb: the main file's size, mtime and sha256, and the `-wal` size (absent and empty
+ * are the same, `0n`). `-shm` is ignored on purpose: every reader of a WAL database touches it.
+ */
 export interface LiveStamp {
-    main: FileStamp;
-    wal: FileStamp;
-    shm: FileStamp;
+    main: {
+        size: bigint;
+        mtimeNs: bigint;
+        sha256: string;
+    };
+    walBytes: bigint;
 }
 export interface Snapshot {
     /** The snapshot file, inside a private 0700 directory removed by `dispose()`. */
@@ -25,7 +27,7 @@ export interface SnapshotOptions {
     /** Test seam: the snapshot primitive. Defaults to db-backup's `createSqliteSnapshot`. */
     createSnapshotFile?: (source: string, destination: string) => void;
 }
-export declare function stampLive(livePath: string): LiveStamp;
+export declare function stampLive(livePath: string): Promise<LiveStamp>;
 export declare function liveUnchanged(before: LiveStamp, after: LiveStamp): boolean;
 /**
  * Snapshot a stopped live SQLite database into a private temp directory and verify the copy. Refuses (typed

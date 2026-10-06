@@ -4,11 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSqliteSnapshot } from '@andrewpopov/db-backup';
 import Database from 'better-sqlite3';
-import { refuse } from './errors.js';
-function stamp(path) {
+import { CloneRefusal, refuse } from './errors.js';
+function sizeOf(path) {
     try {
-        const stats = statSync(path, { bigint: true });
-        return { size: stats.size, mtimeNs: stats.mtimeNs };
+        return statSync(path, { bigint: true }).size;
     }
     catch (error) {
         if (error.code === 'ENOENT')
@@ -16,18 +15,53 @@ function stamp(path) {
         return refuse({ code: 'snapshot-failed' });
     }
 }
-export function stampLive(livePath) {
-    return { main: stamp(livePath), wal: stamp(`${livePath}-wal`), shm: stamp(`${livePath}-shm`) };
+export async function stampLive(livePath) {
+    let stats;
+    try {
+        stats = statSync(livePath, { bigint: true });
+    }
+    catch {
+        return refuse({ code: 'live-database-missing' });
+    }
+    return { main: { size: stats.size, mtimeNs: stats.mtimeNs, sha256: await sha256Of(livePath) }, walBytes: sizeOf(`${livePath}-wal`) ?? 0n };
 }
-const sameStamp = (a, b) => (a === null || b === null ? a === b : a.size === b.size && a.mtimeNs === b.mtimeNs);
 export function liveUnchanged(before, after) {
-    return sameStamp(before.main, after.main) && sameStamp(before.wal, after.wal) && sameStamp(before.shm, after.shm);
+    return (before.main.size === after.main.size && before.main.mtimeNs === after.main.mtimeNs && before.main.sha256 === after.main.sha256 && before.walBytes === after.walBytes);
 }
 async function sha256Of(path) {
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(path))
         hash.update(chunk);
     return hash.digest('hex');
+}
+/**
+ * With writers stopped, fold the live `-wal` into the main file and empty it, so the change evidence is stable
+ * against our own reads. A reader or writer still holding the database (`busy`) or a `-wal` that is not empty
+ * afterwards means somebody is not stopped: refuse. A database that is not in WAL mode reports busy=0, log=-1.
+ */
+function checkpointLive(livePath) {
+    let db;
+    try {
+        db = new Database(livePath, { fileMustExist: true, timeout: 2000 });
+    }
+    catch {
+        return refuse({ code: 'live-checkpoint-blocked' });
+    }
+    try {
+        const [row] = db.pragma('wal_checkpoint(TRUNCATE)');
+        if (row?.busy !== 0)
+            refuse({ code: 'live-checkpoint-blocked' });
+    }
+    catch (error) {
+        if (error instanceof CloneRefusal)
+            throw error;
+        return refuse({ code: 'live-checkpoint-blocked' });
+    }
+    finally {
+        db.close();
+    }
+    if ((sizeOf(`${livePath}-wal`) ?? 0n) !== 0n)
+        refuse({ code: 'live-checkpoint-blocked' });
 }
 /** `PRAGMA integrity_check`, `foreign_key_check` and `encoding` on the snapshot, read-only. Refuses on the first failure. */
 function checkSnapshot(path) {
@@ -71,9 +105,10 @@ const defaultSnapshotFile = (source, destination) => {
 export async function takeSnapshot(options) {
     if (options.writersStopped !== true)
         refuse({ code: 'writers-not-stopped' });
-    const liveBefore = stampLive(options.livePath);
-    if (liveBefore.main === null)
+    if (sizeOf(options.livePath) === null)
         refuse({ code: 'live-database-missing' });
+    checkpointLive(options.livePath);
+    const liveBefore = await stampLive(options.livePath);
     const dir = mkdtempSync(join(tmpdir(), 'db-kit-clone-'));
     const dispose = () => rmSync(dir, { recursive: true, force: true });
     try {
@@ -85,7 +120,7 @@ export async function takeSnapshot(options) {
         catch {
             return refuse({ code: 'snapshot-failed' });
         }
-        const liveAfter = stampLive(options.livePath);
+        const liveAfter = await stampLive(options.livePath);
         if (!liveUnchanged(liveBefore, liveAfter))
             refuse({ code: 'live-changed-during-snapshot' });
         const sha256 = await sha256Of(path);

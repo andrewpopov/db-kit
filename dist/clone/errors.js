@@ -5,6 +5,7 @@ export const CLONE_REFUSAL_CODES = [
     // snapshot
     'writers-not-stopped',
     'live-database-missing',
+    'live-checkpoint-blocked',
     'live-changed-during-snapshot',
     'snapshot-failed',
     'snapshot-integrity-failed',
