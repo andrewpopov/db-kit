@@ -2,6 +2,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { from as copyFrom } from 'pg-copy-streams';
 import { quoteIdent, TARGET_SCHEMA } from './catalog.js';
+import { decodeSourceRow, sourceColumn, textPositions } from './text-read.js';
 const SPECIAL = /[\\\t\n\r]/;
 const ESCAPES = { '\\': '\\\\', '\t': '\\t', '\n': '\\n', '\r': '\\r' };
 function escapeText(text) {
@@ -31,12 +32,14 @@ export function copyField(value) {
 /** Stream one table from the snapshot into Postgres with COPY. Memory is one chunk, never the table. Returns rows written. */
 export async function loadTable(options) {
     const { client, db, table, columns, orderBy, batchBytes } = options;
-    const select = db.prepare(`select ${columns.map((column) => quoteIdent(column.column)).join(', ')} from ${quoteIdent(table)} order by ${orderBy}`).raw(true);
+    const textColumns = textPositions(columns);
+    const select = db.prepare(`select ${columns.map(sourceColumn).join(', ')} from ${quoteIdent(table)} order by ${orderBy}`).raw(true);
     let rows = 0;
     async function* chunks() {
         let lines = [];
         let size = 0;
         for (const row of select.iterate()) {
+            decodeSourceRow(columns, textColumns, row);
             const fields = new Array(columns.length);
             for (let i = 0; i < columns.length; i++)
                 fields[i] = copyField(columns[i].toPostgres(row[i]));

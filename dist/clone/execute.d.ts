@@ -24,6 +24,8 @@ export interface ExecuteOptions extends PlanOptions {
         afterLoad?: (client: Client) => Promise<void>;
         beforeVerify?: (client: Client) => Promise<void>;
         beforeCommit?: (client: Client) => Promise<void>;
+        /** Runs once the transaction's outcome is known, just before the snapshot is removed; receives the snapshot's directory. */
+        afterOutcome?: (snapshotDirectory: string) => void;
     };
 }
 export interface TableResult {
@@ -49,6 +51,8 @@ export interface CloneResult {
         transactionId: string;
         acknowledged: boolean;
     } | null;
+    /** Set when the outcome is final but removing the snapshot directory failed (it holds a full copy of the data: remove it). */
+    cleanupWarning?: 'snapshot-cleanup-failed';
 }
 /**
  * Execute a clone in ONE Postgres transaction or leave the target logically unchanged. The sequence is: take the

@@ -6,7 +6,9 @@ export type CommitMode =
   /** Never deliver COMMIT: cut both sides, the server rolls back. */
   | 'drop-commit'
   /** Cut the client at COMMIT but keep the server session open with the COMMIT undelivered (transaction in progress); deliver it after `holdMs`, or never. */
-  | 'hold';
+  | 'hold'
+  /** Forward COMMIT (the server commits), then answer the client with an ERROR frame instead of the real reply and keep the connection alive, as a pooler that times a query out might. */
+  | 'error-frame';
 
 export interface CommitProxy {
   port: number;
@@ -44,7 +46,20 @@ export async function startCommitProxy(target: { host: string; port: number }, m
       }
       fired = true;
       signal();
-      if (mode === 'drop-reply') {
+      if (mode === 'error-frame') {
+        swallowReplies = true;
+        upstream.write(chunk);
+        timers.add(
+          setTimeout(() => {
+            swallowReplies = false;
+            const fields = Buffer.from('SERROR\0VERROR\0C57014\0Mcanceling statement due to statement timeout\0\0', 'latin1');
+            const error = Buffer.concat([Buffer.from('E'), Buffer.alloc(4), fields]);
+            error.writeUInt32BE(4 + fields.length, 1);
+            client.write(error);
+            client.write(Buffer.from([0x5a, 0, 0, 0, 5, 0x49]));
+          }, 200),
+        );
+      } else if (mode === 'drop-reply') {
         swallowReplies = true;
         upstream.write(chunk);
         timers.add(setTimeout(() => client.destroy(), 50));

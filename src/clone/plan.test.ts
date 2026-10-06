@@ -185,6 +185,17 @@ const CASES: RefusalCase[] = [
       expected: [{ code: 'primary-key-order-unsupported', table: 'k', column: 'id' }],
     }),
   ),
+  {
+    name: 'a CHECK constraint that calls nextval (it would advance the sequence during COPY and survive a rollback)',
+    ddl: ['create sequence audit_seq', "create table items(id bigint primary key, name text not null, constraint chk check (nextval('public.audit_seq') > 0))"],
+    expected: [{ code: 'volatile-expression', table: 'items', object: 'chk' }],
+  },
+  {
+    name: 'a domain CHECK that calls nextval on a column type',
+    ddl: ['create sequence audit_seq', "create domain posd as text check (nextval('public.audit_seq') > 0)", 'create table items(id bigint primary key, name posd not null)'],
+    expected: [{ code: 'volatile-expression', table: 'items', object: 'posd' }],
+  },
+  { name: 'an immutable CHECK is fine', ddl: ['create table items(id bigint primary key, name text not null check (length(name) > 0))'], expected: [] },
   // emptiness
   { name: 'a non-empty table', ddl: [...ITEMS_DDL, "insert into items values (9, 'x')"], expected: [{ code: 'target-not-empty', table: 'items' }] },
   // the receipt table
@@ -331,6 +342,12 @@ describe('target identity and production gating', () => {
 });
 
 describe('source-side refusals', () => {
+  it('refuses TEXT that is not valid UTF-8 (a lossy decode would verify against itself), naming table.column', async () => {
+    const db = await create(ITEMS_DDL);
+    const live = liveSqlite(dir, ['create table items(id integer primary key, name text not null)', "insert into items values (1, 'fine'), (2, cast(x'80' as text))"]);
+    expect((await planOf(db, { livePath: live })).refusals).toEqual([{ code: 'source-invalid-utf8', table: 'items', column: 'name' }]);
+  });
+
   it('refuses a TEXT value containing NUL, naming table.column, but allows NUL inside a blob column', async () => {
     const db = await create(['create table items(id bigint primary key, name text not null, payload bytea not null)']);
     const manifest = manifestOf({ version: 1, tables: { items: table({ id: int, name: text, payload: { codec: 'blob', nullable: false } }) } });

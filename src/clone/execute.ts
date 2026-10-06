@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { Client } from 'pg';
 import { buildCodecs, type ColumnCodec } from '../codecs/bound.js';
 import {
   quoteIdent,
   readForeignKeys,
   readIdentity,
+  readReceiptFacts,
   RECEIPT_COLUMNS,
   RECEIPT_SCHEMA,
   RECEIPT_TABLE,
@@ -14,6 +16,7 @@ import {
 } from './catalog.js';
 import { CloneOutcomeError, CloneRefusal, refuse, toRefusal, type Refusal } from './errors.js';
 import { loadTable } from './load.js';
+import { receiptIsSound } from './rules.js';
 import { postgresOrderBy, sqliteOrderBy } from './order.js';
 import { connectClient, emptyPlan, inspectTarget, prepareSource, type ClonePlan, type PlanOptions } from './plan.js';
 import { openSnapshot } from './source.js';
@@ -44,6 +47,8 @@ export interface ExecuteOptions extends PlanOptions {
     afterLoad?: (client: Client) => Promise<void>;
     beforeVerify?: (client: Client) => Promise<void>;
     beforeCommit?: (client: Client) => Promise<void>;
+    /** Runs once the transaction's outcome is known, just before the snapshot is removed; receives the snapshot's directory. */
+    afterOutcome?: (snapshotDirectory: string) => void;
   };
 }
 
@@ -65,6 +70,8 @@ export interface CloneResult {
   totals: { rows: number; seconds: number };
   /** `acknowledged: false`: the COMMIT reply was lost and the commit was confirmed afterwards through `txid_status`. */
   commit: { transactionId: string; acknowledged: boolean } | null;
+  /** Set when the outcome is final but removing the snapshot directory failed (it holds a full copy of the data: remove it). */
+  cleanupWarning?: 'snapshot-cleanup-failed';
 }
 
 const seconds = (since: number): number => (performance.now() - since) / 1000;
@@ -79,14 +86,28 @@ const seconds = (since: number): number => (performance.now() - since) / 1000;
  */
 export async function executeClone(options: ExecuteOptions): Promise<CloneResult> {
   const snapshot = await takeSnapshot(options);
+  let result: CloneResult | undefined;
+  let failure: unknown;
   try {
-    return await executeFromSnapshot(snapshot, options);
+    result = await executeFromSnapshot(snapshot, options);
   } catch (error) {
-    if (error instanceof CloneRefusal || error instanceof CloneOutcomeError) throw error;
-    throw new CloneRefusal(isLockTimeout(error) ? { code: 'lock-timeout' } : toRefusal(error, 'execute-failed'));
-  } finally {
-    snapshot.dispose();
+    failure = error;
   }
+  // The outcome is settled before cleanup starts, and nothing cleanup does can replace it.
+  let cleanupFailed = false;
+  try {
+    options.hooks?.afterOutcome?.(dirname(snapshot.path));
+    snapshot.dispose();
+  } catch {
+    cleanupFailed = true;
+  }
+  if (result) return cleanupFailed ? { ...result, cleanupWarning: 'snapshot-cleanup-failed' } : result;
+  if (failure instanceof CloneOutcomeError) {
+    failure.cleanupFailed = cleanupFailed;
+    throw failure;
+  }
+  if (failure instanceof CloneRefusal) throw failure;
+  throw new CloneRefusal(isLockTimeout(failure) ? { code: 'lock-timeout' } : toRefusal(failure, 'execute-failed'));
 }
 
 const isLockTimeout = (error: unknown): boolean => typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '55P03';
@@ -166,7 +187,7 @@ async function executeFromSnapshot(snapshot: Snapshot, options: ExecuteOptions):
     }
 
     const runId = randomUUID();
-    await writeReceipt(client, runId, startedAt, manifest, results);
+    await writeReceipt(client, identity.serverVersionNum, runId, startedAt, manifest, results);
     await options.hooks?.beforeCommit?.(client);
     const finish = (outcome: CloneResult['outcome'], commit: CloneResult['commit']): CloneResult => ({
       outcome,
@@ -191,14 +212,18 @@ async function executeFromSnapshot(snapshot: Snapshot, options: ExecuteOptions):
       if (open) await client.query('ROLLBACK').catch(() => undefined);
       await client.end().catch(() => undefined);
     }
-    db.close();
+    try {
+      db.close();
+    } catch {
+      // a failing close must not replace the outcome
+    }
   }
 }
 
 const qualify = (schema: string, name: string): string => `${quoteIdent(schema)}.${quoteIdent(name)}`;
 const qualified = (table: string): string => qualify(TARGET_SCHEMA, table);
 
-/** ACCESS EXCLUSIVE on every copied table and every table joined to one by a foreign key, in name order. Returns the copied tables' oids. */
+/** ACCESS EXCLUSIVE on every copied table, every table joined to one by a foreign key, and the receipt table when it exists, in name order. Returns the copied tables' oids. */
 async function lockTables(client: Client, tables: readonly string[]): Promise<number[]> {
   const copied = (
     await client.query<{ oid: number }>(
@@ -215,7 +240,9 @@ async function lockTables(client: Client, tables: readonly string[]): Promise<nu
       order by 1`,
     [copied],
   );
-  if (rows.length > 0) await client.query(`LOCK TABLE ${rows.map((row) => row.name).join(', ')} IN ACCESS EXCLUSIVE MODE`);
+  const receipt = (await client.query<{ name: string | null }>("select pg_catalog.to_regclass($1::text)::text as name", [`${quoteIdent(RECEIPT_SCHEMA)}.${quoteIdent(RECEIPT_TABLE)}`])).rows[0]?.name;
+  const names = [...new Set([...rows.map((row) => row.name), ...(receipt ? [receipt] : [])])].sort();
+  if (names.length > 0) await client.query(`LOCK TABLE ${names.join(', ')} IN ACCESS EXCLUSIVE MODE`);
   return copied;
 }
 
@@ -233,35 +260,52 @@ export async function assertForeignKeysRestored(client: Client, copiedOids: read
   }
 }
 
-async function writeReceipt(client: Client, runId: string, startedAt: Date, manifest: unknown, results: readonly TableResult[]): Promise<void> {
+async function writeReceipt(client: Client, versionNum: number, runId: string, startedAt: Date, manifest: unknown, results: readonly TableResult[]): Promise<void> {
   const columns = Object.entries(RECEIPT_COLUMNS)
     .map(([name, type]) => `${quoteIdent(name)} ${type}${name === 'run_id' ? ' primary key' : ' not null'}`)
     .join(', ');
   await client.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(RECEIPT_SCHEMA)}`);
   await client.query(`CREATE TABLE IF NOT EXISTS ${qualify(RECEIPT_SCHEMA, RECEIPT_TABLE)} (${columns})`);
+  // Locked (a table created here is locked by its creator) and re-validated before anything is inserted: a trigger, rule,
+  // RLS policy or publication that appeared since the preflight would run inside this transaction, after verification.
+  await client.query(`LOCK TABLE ${qualify(RECEIPT_SCHEMA, RECEIPT_TABLE)} IN ACCESS EXCLUSIVE MODE`);
+  const { table: facts } = await readReceiptFacts(client, versionNum);
+  if (!facts || !receiptIsSound(facts)) return refuse({ code: 'receipt-table-invalid', table: `${RECEIPT_SCHEMA}.${RECEIPT_TABLE}` });
   const perTable = Object.fromEntries(results.map((result) => [result.table, { rows: result.rows, sha256: result.sha256 }]));
   const manifestSha = createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
   await client.query(`INSERT INTO ${qualify(RECEIPT_SCHEMA, RECEIPT_TABLE)} (run_id, started_at, manifest_sha, per_table) VALUES ($1, $2, $3, $4::jsonb)`, [runId, startedAt.toISOString(), manifestSha, JSON.stringify(perTable)]);
 }
 
-const isServerError = (error: unknown): boolean => typeof error === 'object' && error !== null && /^[0-9A-Z]{5}$/.test(String((error as { code?: unknown }).code ?? ''));
-
 /**
- * COMMIT. A server-reported failure means nothing was committed. A lost connection is ambiguous, so reconnect,
- * re-verify the target's identity and poll `txid_status` for the transaction recorded just before COMMIT (bounded;
- * 'in progress' keeps waiting). Never retries the COMMIT. Returns whether the acknowledgement arrived.
+ * COMMIT. No error is proof of anything: a SQLSTATE can come from a pooler or proxy that gave up after the server
+ * committed. Whatever happened, the transaction's own status decides. It is asked on the same connection first (a
+ * server that rejected the COMMIT, a deferred constraint for one, answers 'aborted' there), then, if that
+ * connection is gone, through a reconnect with the identity re-verified and a bounded poll ('in progress' keeps
+ * waiting). Never retries the COMMIT. Returns whether the acknowledgement arrived.
  */
 async function commit(client: Client, options: ExecuteOptions, identity: TargetIdentityFacts, runId: string, xid: string): Promise<boolean> {
   try {
     await client.query('COMMIT');
     return true;
-  } catch (error) {
-    if (isServerError(error)) throw new CloneOutcomeError('aborted', runId, xid);
+  } catch {
+    // fall through: the status decides
   }
+  const live = await statusOnLiveConnection(client, xid);
+  if (live === 'committed') return false;
+  if (live === 'aborted') throw new CloneOutcomeError('aborted', runId, xid);
   client.connection.stream.destroy();
   const status = await pollTransactionStatus(options, identity, xid);
   if (status === 'committed') return false;
   throw new CloneOutcomeError(status === 'aborted' ? 'aborted' : 'unknown', runId, xid);
+}
+
+async function statusOnLiveConnection(client: Client, xid: string): Promise<string | null> {
+  const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000).unref());
+  const ask = client.query<{ status: string | null }>('select pg_catalog.txid_status($1::bigint) as status', [xid]).then(
+    (result) => result.rows[0]?.status ?? null,
+    () => null,
+  );
+  return Promise.race([ask, timeout]);
 }
 
 async function pollTransactionStatus(options: ExecuteOptions, identity: TargetIdentityFacts, xid: string): Promise<'committed' | 'aborted' | 'unknown'> {

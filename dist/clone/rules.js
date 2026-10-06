@@ -64,21 +64,14 @@ export function evaluateGate(facts, manifest, options) {
     for (const use of facts.dynamicSequenceDefaults) {
         refuse({ code: 'sequence-dynamic-default', table: use.schema === TARGET_SCHEMA ? use.table : `${use.schema}.${use.table}`, column: use.column });
     }
+    for (const expression of facts.volatileExpressions)
+        refuse({ code: 'volatile-expression', table: expression.table, object: expression.object });
     const sequences = classifySequences(facts.sequenceRefs, copied, refuse);
     const { receipt } = facts;
     for (const publication of receipt.adoptingPublications)
         refuse({ ...RECEIPT_REFUSAL, object: publication });
     if (receipt.table) {
-        const columnsMatch = sameList(Object.keys(receipt.table.columns).sort(), Object.keys(RECEIPT_COLUMNS).sort()) && Object.entries(RECEIPT_COLUMNS).every(([name, type]) => receipt.table?.columns[name] === type);
-        const sound = receipt.table.kind === 'r' &&
-            receipt.table.isOwner &&
-            !receipt.table.rowSecurity &&
-            !receipt.table.hasTrigger &&
-            !receipt.table.hasRule &&
-            !receipt.table.published &&
-            columnsMatch &&
-            sameList(receipt.table.primaryKey, RECEIPT_PRIMARY_KEY);
-        if (!sound)
+        if (!receiptIsSound(receipt.table))
             refuse(RECEIPT_REFUSAL);
     }
     else if (!receipt.canCreate) {
@@ -93,6 +86,11 @@ export function evaluateGate(facts, manifest, options) {
         if (slot.retainedBytes > options.maxSlotRetentionBytes)
             refuse({ code: 'replication-slot-lag', object: slot.name });
     return { refusals, foreignKeys, incomingReferences, sequences };
+}
+/** The receipt table is safe to insert into: a plain owned table of exactly the expected shape that nothing else hooks into. */
+export function receiptIsSound(table) {
+    const columnsMatch = sameList(Object.keys(table.columns).sort(), Object.keys(RECEIPT_COLUMNS).sort()) && Object.entries(RECEIPT_COLUMNS).every(([name, type]) => table.columns[name] === type);
+    return table.kind === 'r' && table.isOwner && !table.rowSecurity && !table.hasTrigger && !table.hasRule && !table.published && columnsMatch && sameList(table.primaryKey, RECEIPT_PRIMARY_KEY);
 }
 /**
  * A sequence is clone-safe only when it belongs to exactly one column of a copied table (OWNED BY or identity) and

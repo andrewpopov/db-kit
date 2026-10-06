@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { Client } from 'pg';
+import { type Client } from 'pg';
 import type { ColumnCodec } from '../codecs/bound.js';
 import type { Dialect } from '../codecs/implementations.js';
 /**

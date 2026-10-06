@@ -2,6 +2,8 @@ import Database from 'better-sqlite3';
 import type { CodecManifest } from '../codecs/manifest.js';
 import type { IntrospectedSchema } from '../codecs/introspect.js';
 import { quoteIdent } from './catalog.js';
+import { readsText, textAsBytes } from './text-read.js';
+import { isUtf8 } from 'node:buffer';
 import { refuse, type Refusal } from './errors.js';
 
 export interface SourceTableFacts {
@@ -52,11 +54,29 @@ export function scanSource(db: Database.Database, manifest: CodecManifest, schem
       return refuse({ code: 'source-read-failed', table });
     }
     tables.push({ table, rows: count(row?.n), estimatedBytes: count(row?.bytes) });
+    for (const name of invalidUtf8Columns(db, table, columns)) refusals.push({ code: 'source-invalid-utf8', table, column: name });
     checked.forEach(([name], index) => {
       if (count(row?.[`nul_${index}`]) > 0) refusals.push({ code: 'source-nul-in-text', table, column: name });
     });
   }
   return { tables, refusals };
+}
+
+/** A second pass over the text columns' stored bytes: SQL cannot validate UTF-8, and a lossy decode would verify against itself. */
+function invalidUtf8Columns(db: Database.Database, table: string, columns: readonly [string, { codec: string }][]): string[] {
+  const text = columns.filter(([, column]) => readsText(column.codec));
+  if (text.length === 0) return [];
+  const bad = new Set<number>();
+  const select = db.prepare(`select ${text.map(([name]) => textAsBytes(name)).join(', ')} from ${quoteIdent(table)}`).raw(true);
+  try {
+    for (const row of select.iterate() as IterableIterator<unknown[]>) {
+      for (let i = 0; i < text.length; i++) if (!bad.has(i) && Buffer.isBuffer(row[i]) && !isUtf8(row[i] as Buffer)) bad.add(i);
+      if (bad.size === text.length) break;
+    }
+  } catch {
+    return refuse({ code: 'source-read-failed', table });
+  }
+  return text.flatMap(([name], i) => (bad.has(i) ? [name] : []));
 }
 
 export interface SequenceSourceFacts {

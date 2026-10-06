@@ -114,6 +114,8 @@ export interface TargetFacts {
   sequenceRefs: SequenceRef[];
   /** Column defaults anywhere in the database that call nextval() without a resolvable sequence dependency (a text or computed argument). */
   dynamicSequenceDefaults: { schema: string; table: string; column: string }[];
+  /** CHECK / exclusion constraints, index expressions, generated columns and column-type domains of copied tables that call a volatile function. */
+  volatileExpressions: { table: string; object: string }[];
   receipt: ReceiptFacts;
   nonEmptyTables: string[];
   archiverFailedRecently: boolean;
@@ -300,7 +302,37 @@ export async function readTargetFacts(client: PostgresQueryable, tableNames: rea
       order by 1, 2, 3`,
   );
 
-  const receipt = await readReceipt(q, versionNum);
+  // Built-in functions are "pinned" and leave no pg_depend row, so the expression trees themselves are read: every
+  // function and operator node in them carries its pg_proc oid (`:funcid` / `:opfuncid`).
+  const volatileExpressions = (
+    await q<{ table_oid: number; object: string }>(
+      `select distinct x.rel::int as table_oid, x.name as object
+         from (
+           select k.conrelid as rel, k.conname::text as name, k.conbin::text as tree
+             from pg_catalog.pg_constraint k where k.conrelid = any($1::oid[]) and k.contype = 'c'
+           union all
+           select i.indrelid, ic.relname::text, coalesce(i.indexprs::text, '') || coalesce(i.indpred::text, '')
+             from pg_catalog.pg_index i join pg_catalog.pg_class ic on ic.oid = i.indexrelid where i.indrelid = any($1::oid[])
+           union all
+           select ad.adrelid, a.attname::text, ad.adbin::text
+             from pg_catalog.pg_attrdef ad join pg_catalog.pg_attribute a on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+            where ad.adrelid = any($1::oid[]) and a.attgenerated <> ''
+           union all
+           select a.attrelid, t.typname::text, k.conbin::text
+             from pg_catalog.pg_attribute a
+             join pg_catalog.pg_type t on t.oid = a.atttypid and t.typtype = 'd'
+             join pg_catalog.pg_constraint k on k.contypid = t.oid
+            where a.attrelid = any($1::oid[]) and a.attnum > 0 and not a.attisdropped
+         ) x
+        where x.tree is not null
+          and exists (select 1 from pg_catalog.regexp_matches(x.tree, ':(?:funcid|opfuncid) ([0-9]+)', 'g') m(g)
+                        join pg_catalog.pg_proc p on p.oid = m.g[1]::oid where p.provolatile = 'v')
+        order by 1, 2`,
+      [oids],
+    )
+  ).map((row) => ({ table: nameOf(row.table_oid), object: row.object }));
+
+  const receipt = await readReceiptFacts(client, versionNum);
 
   const nonEmptyTables: string[] = [];
   for (const table of tables) {
@@ -332,6 +364,7 @@ export async function readTargetFacts(client: PostgresQueryable, tableNames: rea
     subscriptionCount: Number(subscriptions),
     sequenceRefs,
     dynamicSequenceDefaults,
+    volatileExpressions,
     receipt,
     nonEmptyTables,
     archiverFailedRecently: failing,
@@ -413,7 +446,9 @@ export async function readForeignKeys(client: PostgresQueryable, oids: readonly 
   );
 }
 
-async function readReceipt(q: <Row extends object>(text: string, values?: unknown[]) => Promise<Row[]>, versionNum: number): Promise<ReceiptFacts> {
+/** `db_kit.clone_receipt`: whether it exists and everything the safety rules need to know about it. */
+export async function readReceiptFacts(client: PostgresQueryable, versionNum: number): Promise<ReceiptFacts> {
+  const q = async <Row extends object>(text: string, values: unknown[] = []): Promise<Row[]> => (await client.query<Row & Record<string, unknown>>(text, values)).rows;
   const adopting = (
     await q<{ name: string }>(
       `select p.pubname::text as name from pg_catalog.pg_publication p

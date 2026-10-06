@@ -1,5 +1,7 @@
 import { rmSync } from 'node:fs';
-import { Client } from 'pg';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { Client, types } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CodecManifestInput } from '../codecs/manifest.js';
 import { startCommitProxy, type CommitMode } from '../test-support/commit-proxy.js';
@@ -9,7 +11,10 @@ import { CloneOutcomeError, CloneRefusal, type Refusal } from './errors.js';
 import { assertForeignKeysRestored, executeClone, type ExecuteOptions } from './execute.js';
 import { readForeignKeys, readIdentity } from './catalog.js';
 import { copyField } from './load.js';
-import { encodeRow } from './verify.js';
+import { encodeRow, verifyTable } from './verify.js';
+import { loadTable } from './load.js';
+import { openSnapshot } from './source.js';
+import { postgresOrderBy, sqliteOrderBy } from './order.js';
 import { buildCodecs } from '../codecs/bound.js';
 
 let server: ThrowawayPostgres;
@@ -497,6 +502,140 @@ describe('assertForeignKeysRestored', () => {
     }
     expect(await refusalOf(() => assertForeignKeysRestored(db.admin, oids, identity, [fk, { ...fk, name: 'phantom' }]))).toEqual({ code: 'foreign-keys-changed' });
     expect(await refusalOf(() => assertForeignKeysRestored(db.admin, oids, identity, []))).toEqual({ code: 'foreign-keys-changed' });
+  });
+});
+
+describe('executeClone: review follow-ups', () => {
+  const rowsOf = async (db: TargetDatabase): Promise<number> => ((await db.admin.query('select count(*)::int as n from parent')).rows[0] as { n: number }).n;
+
+  it('a SQLSTATE-bearing COMMIT error is not proof of abort: the transaction status decides (a pooler timed out after the server committed)', async () => {
+    const db = await create(SMALL_DDL);
+    const proxy = await startCommitProxy({ host: db.config.host, port: db.config.port }, 'error-frame');
+    try {
+      const result = await executeClone(options(db, SMALL_LIVE(), SMALL_MANIFEST, { target: { ...db.config, port: proxy.port }, commitPollMs: 5000 }));
+      expect(result.outcome).toBe('committed');
+      expect(result.commit?.acknowledged).toBe(false);
+      expect(await rowsOf(db)).toBe(2);
+    } finally {
+      await proxy.close();
+    }
+  }, 60_000);
+
+  /** Make the snapshot directory undeletable once the transaction is over, and hand the test its path to repair. */
+  const undeletable = (paths: string[]) => (directory: string) => {
+    paths.push(directory);
+    chmodSync(directory, 0o500);
+  };
+  const repair = (paths: string[]): void => {
+    for (const directory of paths) {
+      if (existsSync(directory)) {
+        chmodSync(directory, 0o700);
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  };
+
+  it('a cleanup failure after COMMIT does not replace the committed result', async () => {
+    const db = await create(SMALL_DDL);
+    const paths: string[] = [];
+    try {
+      const result = await executeClone(options(db, SMALL_LIVE(), SMALL_MANIFEST, { hooks: { afterOutcome: undeletable(paths) } }));
+      expect(result.outcome).toBe('committed');
+      expect(result.cleanupWarning).toBe('snapshot-cleanup-failed');
+      expect(await rowsOf(db)).toBe(2);
+    } finally {
+      repair(paths);
+    }
+  });
+
+  it('a cleanup failure does not replace an UNKNOWN commit outcome either', async () => {
+    const db = await create(SMALL_DDL);
+    const proxy = await startCommitProxy({ host: db.config.host, port: db.config.port }, 'hold');
+    const paths: string[] = [];
+    try {
+      const error: unknown = await executeClone(options(db, SMALL_LIVE(), SMALL_MANIFEST, { target: { ...db.config, port: proxy.port }, commitPollMs: 800, hooks: { afterOutcome: undeletable(paths) } })).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(CloneOutcomeError);
+      expect((error as CloneOutcomeError).outcome).toBe('unknown');
+      expect((error as CloneOutcomeError).cleanupFailed).toBe(true);
+    } finally {
+      await proxy.close();
+      repair(paths);
+    }
+  }, 60_000);
+
+  const RECEIPT_DDL = ['create schema db_kit', 'create table db_kit.clone_receipt(run_id uuid primary key, started_at timestamptz not null, manifest_sha text not null, per_table jsonb not null)'];
+
+  it('locks an existing receipt table with the copied tables: a trigger cannot be added to it mid-run', async () => {
+    const db = await create([...SMALL_DDL, ...RECEIPT_DDL, 'create function db_kit.noop() returns trigger language plpgsql as $$ begin return new; end $$']);
+    const attempts: string[] = [];
+    const result = await executeClone(
+      options(db, SMALL_LIVE(), SMALL_MANIFEST, {
+        hooks: {
+          afterLoad: async () => {
+            const rival = new Client({ host: db.config.host, port: db.config.port, user: db.config.user, password: db.config.password, database: db.config.database });
+            await rival.connect();
+            try {
+              await rival.query("set lock_timeout = '300ms'");
+              await rival.query('create trigger t before insert on db_kit.clone_receipt for each row execute function db_kit.noop()');
+              attempts.push('created');
+            } catch (error) {
+              attempts.push((error as { code?: string }).code ?? 'other');
+            } finally {
+              await rival.end();
+            }
+          },
+        },
+      }),
+    );
+    expect(attempts).toEqual(['55P03']);
+    expect(result.outcome).toBe('committed');
+  });
+
+  it('re-validates the receipt table before inserting: a trigger that slipped in after preflight is refused', async () => {
+    const db = await create([...SMALL_DDL, ...RECEIPT_DDL, 'create function db_kit.noop() returns trigger language plpgsql as $$ begin return new; end $$']);
+    const refusal = await refusalOf(() =>
+      executeClone(options(db, SMALL_LIVE(), SMALL_MANIFEST, { hooks: { afterLoad: async (c: Client) => void (await c.query('create trigger t before insert on db_kit.clone_receipt for each row execute function db_kit.noop()')) } })),
+    );
+    expect(refusal).toEqual({ code: 'receipt-table-invalid', table: 'db_kit.clone_receipt' });
+    expect(await rowsOf(db)).toBe(0);
+  });
+
+  it('verification does not use global pg type parsers: a lowercasing TEXT parser cannot hide a real difference', async () => {
+    const db = await create(SMALL_DDL);
+    types.setTypeParser(25, (value: string) => value.toLowerCase());
+    try {
+      const refusal = await refusalOf(() =>
+        executeClone(options(db, SMALL_LIVE(), SMALL_MANIFEST, { hooks: { beforeVerify: async (c: Client) => void (await c.query("update public.items set name = 'X' where id = 4")) } })),
+      );
+      expect(refusal).toEqual({ code: 'verification-mismatch', table: 'items', column: 'name' });
+    } finally {
+      types.setTypeParser(25, (value: string) => value);
+    }
+  });
+
+  it('loadTable and verifyTable refuse invalid UTF-8 themselves, behind the preflight scan', async () => {
+    const db = await create(['create table items(id bigint primary key, name text not null)']);
+    const manifest = manifestOf({ version: 1, tables: { items: table({ id: int, name: text }) } });
+    const live = liveSqlite(dir, ['create table items(id integer primary key, name text not null)', "insert into items values (1, cast(x'80' as text))"]);
+    const sqlite = openSnapshot(live);
+    try {
+      const spec = manifest.tables.items;
+      if (!spec) throw new Error('fixture');
+      const codecs = buildCodecs(manifest);
+      const columns = ['id', 'name'].map((c) => codecs.column('items', c));
+      const refused = { code: 'source-invalid-utf8', table: 'items', column: 'name' };
+      expect(await refusalOf(() => loadTable({ client: db.admin, db: sqlite, table: 'items', columns, orderBy: sqliteOrderBy(spec), batchBytes: 1 << 20 }))).toEqual(refused);
+      await db.admin.query('truncate items');
+      await db.admin.query("insert into items values (1, E'\\357\\277\\275')"); // what a lossy decode would have loaded
+      await db.admin.query('begin');
+      try {
+        expect(await refusalOf(() => verifyTable({ client: db.admin, db: sqlite, table: 'items', columns, primaryKey: ['id'], sqliteOrderBy: sqliteOrderBy(spec), postgresOrderBy: postgresOrderBy(spec), fetchRows: 100 }))).toEqual(refused);
+      } finally {
+        await db.admin.query('rollback');
+      }
+    } finally {
+      sqlite.close();
+    }
   });
 });
 

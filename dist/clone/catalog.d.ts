@@ -113,6 +113,11 @@ export interface TargetFacts {
         table: string;
         column: string;
     }[];
+    /** CHECK / exclusion constraints, index expressions, generated columns and column-type domains of copied tables that call a volatile function. */
+    volatileExpressions: {
+        table: string;
+        object: string;
+    }[];
     receipt: ReceiptFacts;
     nonEmptyTables: string[];
     archiverFailedRecently: boolean;
@@ -129,3 +134,5 @@ export declare function readIdentity(client: PostgresQueryable): Promise<TargetI
 export declare function readTargetFacts(client: PostgresQueryable, tableNames: readonly string[], versionNum: number): Promise<TargetFacts>;
 /** Every foreign key owned by or pointing at one of `oids`, with the catalog fields A1 compares. */
 export declare function readForeignKeys(client: PostgresQueryable, oids: readonly number[], versionNum: number): Promise<ForeignKeyFact[]>;
+/** `db_kit.clone_receipt`: whether it exists and everything the safety rules need to know about it. */
+export declare function readReceiptFacts(client: PostgresQueryable, versionNum: number): Promise<ReceiptFacts>;

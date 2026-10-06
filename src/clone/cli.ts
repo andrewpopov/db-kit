@@ -17,6 +17,8 @@ export interface CliIo {
   err(text: string): void;
 }
 
+const CLEANUP_WARNING = 'WARNING: removing the temporary snapshot failed; it holds a full copy of the data, so delete the db-kit-clone-* directory under the temp directory by hand';
+
 const USAGE = `usage: db-kit clone --from-live <sqlite path> --manifest <file> --writers-stopped (--plan-only | --dry-run | --execute)
          [--topology <file>] [--confirm-production host:port/db] [--truncate] [--json] [--commit-poll-seconds n]
   target URL: environment variable ${TARGET_URL_ENV}`;
@@ -56,10 +58,11 @@ export async function runCloneCli(argv: readonly string[], env: NodeJS.ProcessEn
       onProgress: values.json ? undefined : (event) => io.err(`${event.phase} ${event.table}: ${event.rows} rows in ${event.seconds.toFixed(1)}s`),
     });
     io.out(values.json ? resultToJson(result) : resultToText(result));
+    if (result.cleanupWarning && !values.json) io.err(CLEANUP_WARNING);
     return 0;
   } catch (error) {
     if (error instanceof CloneOutcomeError) {
-      io.err(values.json ? JSON.stringify({ ok: false, outcome: error.outcome, runId: error.runId, transactionId: error.transactionId }) : `COMMIT ${error.outcome.toUpperCase()}: run ${error.runId} transaction ${error.transactionId ?? '?'}${error.outcome === 'unknown' ? ' (inspect db_kit.clone_receipt before doing anything else)' : ' (nothing was committed)'}`);
+      io.err(values.json ? JSON.stringify({ ok: false, outcome: error.outcome, runId: error.runId, transactionId: error.transactionId, cleanupFailed: error.cleanupFailed }) : `COMMIT ${error.outcome.toUpperCase()}: run ${error.runId} transaction ${error.transactionId ?? '?'}${error.outcome === 'unknown' ? ' (inspect db_kit.clone_receipt before doing anything else)' : ' (nothing was committed)'}${error.cleanupFailed ? ` -- ${CLEANUP_WARNING}` : ''}`);
       return error.outcome === 'aborted' ? 4 : 5;
     }
     const refusal = error instanceof CloneRefusal ? error.refusal : toRefusal(error);

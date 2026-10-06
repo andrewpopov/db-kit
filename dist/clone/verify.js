@@ -1,6 +1,22 @@
 import { createHash } from 'node:crypto';
+import { types as pgTypes } from 'pg';
 import { quoteIdent, TARGET_SCHEMA } from './catalog.js';
 import { refuse } from './errors.js';
+import { decodeSourceRow, sourceColumn, textPositions } from './text-read.js';
+/**
+ * Parsers for the verification reads, fixed here: `pg.types` is process-global, so anything an application registered
+ * (a lowercasing TEXT parser, a Date parser) would otherwise decide what the target "says". timestamptz and json/jsonb
+ * stay raw text, int8 and numeric stay strings (the codecs' contract); an unlisted type arrives as its text.
+ */
+const FIXED_PARSERS = new Map([
+    [pgTypes.builtins.INT2, (text) => Number.parseInt(text, 10)],
+    [pgTypes.builtins.INT4, (text) => Number.parseInt(text, 10)],
+    [pgTypes.builtins.FLOAT4, Number.parseFloat],
+    [pgTypes.builtins.FLOAT8, Number.parseFloat],
+    [pgTypes.builtins.BOOL, (text) => text === 't'],
+    [pgTypes.builtins.BYTEA, (text) => Buffer.from(text.slice(2), 'hex')],
+]);
+const VERIFY_TYPES = { getTypeParser: (oid) => FIXED_PARSERS.get(oid) ?? ((text) => text) };
 const HEADER = Buffer.from('db-kit clone row encoding v1\0');
 const NULL_MARK = Buffer.from([0]);
 const VALUE_MARK = Buffer.from([1]);
@@ -39,7 +55,9 @@ const CURSOR = 'db_kit_verify';
 export async function verifyTable(options) {
     const { client, db, table, columns, fetchRows } = options;
     const names = columns.map((column) => quoteIdent(column.column)).join(', ');
-    const source = db.prepare(`select ${names} from ${quoteIdent(table)} order by ${options.sqliteOrderBy}`).raw(true).iterate()[Symbol.iterator]();
+    const sourceNames = columns.map(sourceColumn).join(', ');
+    const textColumns = textPositions(columns);
+    const source = db.prepare(`select ${sourceNames} from ${quoteIdent(table)} order by ${options.sqliteOrderBy}`).raw(true).iterate()[Symbol.iterator]();
     const pkIndexes = options.primaryKey.map((name) => columns.findIndex((column) => column.column === name));
     const sourceHash = createHash('sha256').update(HEADER);
     let rows = 0;
@@ -48,7 +66,7 @@ export async function verifyTable(options) {
     await client.query(`DECLARE ${CURSOR} NO SCROLL CURSOR FOR select ${names} from ${quoteIdent(TARGET_SCHEMA)}.${quoteIdent(table)} order by ${options.postgresOrderBy}`);
     try {
         for (;;) {
-            const { rows: batch } = await client.query({ text: `FETCH FORWARD ${fetchRows} FROM ${CURSOR}`, rowMode: 'array' });
+            const { rows: batch } = await client.query({ text: `FETCH FORWARD ${fetchRows} FROM ${CURSOR}`, rowMode: 'array', types: VERIFY_TYPES });
             if (batch.length === 0)
                 break;
             for (const targetRow of batch) {
@@ -56,6 +74,7 @@ export async function verifyTable(options) {
                 if (next.done === true)
                     return mismatch();
                 const sourceRow = next.value;
+                decodeSourceRow(columns, textColumns, sourceRow);
                 const sourceEncoded = encodeRow(columns, sourceRow, 'sqlite');
                 const targetEncoded = encodeRow(columns, targetRow, 'postgres');
                 if (!sourceEncoded.equals(targetEncoded)) {

@@ -5,6 +5,7 @@ import type { Client } from 'pg';
 import { from as copyFrom } from 'pg-copy-streams';
 import type { ColumnCodec } from '../codecs/bound.js';
 import { quoteIdent, TARGET_SCHEMA } from './catalog.js';
+import { decodeSourceRow, sourceColumn, textPositions } from './text-read.js';
 import type { PgValue } from '../codecs/implementations.js';
 
 const SPECIAL = /[\\\t\n\r]/;
@@ -49,12 +50,14 @@ export interface LoadOptions {
 /** Stream one table from the snapshot into Postgres with COPY. Memory is one chunk, never the table. Returns rows written. */
 export async function loadTable(options: LoadOptions): Promise<number> {
   const { client, db, table, columns, orderBy, batchBytes } = options;
-  const select = db.prepare(`select ${columns.map((column) => quoteIdent(column.column)).join(', ')} from ${quoteIdent(table)} order by ${orderBy}`).raw(true);
+  const textColumns = textPositions(columns);
+  const select = db.prepare(`select ${columns.map(sourceColumn).join(', ')} from ${quoteIdent(table)} order by ${orderBy}`).raw(true);
   let rows = 0;
   async function* chunks(): AsyncGenerator<string> {
     let lines: string[] = [];
     let size = 0;
     for (const row of select.iterate() as IterableIterator<unknown[]>) {
+      decodeSourceRow(columns, textColumns, row);
       const fields = new Array<string>(columns.length);
       for (let i = 0; i < columns.length; i++) fields[i] = copyField((columns[i] as ColumnCodec).toPostgres(row[i]));
       const line = `${fields.join('\t')}\n`;

@@ -14,6 +14,7 @@ export const CLONE_REFUSAL_CODES = [
     'snapshot-not-utf8',
     // source data
     'source-nul-in-text',
+    'source-invalid-utf8',
     'source-read-failed',
     'codec-null',
     'codec-invalid',
@@ -45,6 +46,7 @@ export const CLONE_REFUSAL_CODES = [
     'sequence-unowned',
     'sequence-shared',
     'sequence-dynamic-default',
+    'volatile-expression',
     'sequence-cycles',
     'sequence-out-of-range',
     'incoming-reference-from-uncopied-table',
@@ -101,6 +103,8 @@ export class CloneOutcomeError extends DbKitError {
     outcome;
     runId;
     transactionId;
+    /** Set when removing the snapshot failed after the outcome was known; the outcome itself is unchanged. */
+    cleanupFailed = false;
     constructor(outcome, runId, transactionId) {
         super('CLONE_OUTCOME', `commit ${outcome} (run ${runId})`);
         this.name = 'CloneOutcomeError';
