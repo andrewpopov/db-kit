@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/db-kit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Fleet database toolkit: open SQLite or Postgres from a DATABASE_URL with fleet-standard settings and a redacted description.",
   "author": "Andrew Popov",
   "license": "MIT",

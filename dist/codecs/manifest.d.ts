@@ -20,6 +20,7 @@ export declare const ColumnSpecSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     nullable: z.ZodBoolean;
     generated: z.ZodOptional<z.ZodBoolean>;
     codec: z.ZodLiteral<"decimal-as-string">;
+    acceptSqliteNumeric: z.ZodDefault<z.ZodBoolean>;
 }, z.core.$strict>, z.ZodObject<{
     nullable: z.ZodBoolean;
     generated: z.ZodOptional<z.ZodBoolean>;
@@ -111,6 +112,7 @@ export declare const TableSpecSchema: z.ZodObject<{
     } | {
         nullable: boolean;
         codec: "decimal-as-string";
+        acceptSqliteNumeric: boolean;
         generated?: boolean | undefined;
     } | {
         nullable: boolean;
@@ -186,6 +188,7 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
         } | {
             nullable: boolean;
             codec: "decimal-as-string";
+            acceptSqliteNumeric: boolean;
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
@@ -258,6 +261,7 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
         } | {
             nullable: boolean;
             codec: "decimal-as-string";
+            acceptSqliteNumeric: boolean;
             generated?: boolean | undefined;
         } | {
             nullable: boolean;
@@ -330,6 +334,7 @@ export declare const CodecManifestSchema: z.ZodPipe<z.ZodObject<{
         } | {
             nullable: boolean;
             codec: "decimal-as-string";
+            acceptSqliteNumeric: boolean;
             generated?: boolean | undefined;
         } | {
             nullable: boolean;

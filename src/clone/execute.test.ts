@@ -208,6 +208,36 @@ describe('executeClone: a column that mixes epoch integers and SQLite datetime()
   });
 });
 
+describe('executeClone: a Decimal column on SQLite NUMERIC affinity (INTEGER, REAL and NULL rows)', () => {
+  const column = { codec: 'decimal-as-string', acceptSqliteNumeric: true, nullable: true } as const;
+  const manifest = manifestOf({ version: 1, tables: { recipe_ingredients: table({ id: int, quantity: column }) } });
+  const ddl = ['create table recipe_ingredients(id bigint primary key, quantity numeric)'];
+  const mixed = (): string =>
+    liveSqlite(dir, ['create table recipe_ingredients(id integer primary key, quantity numeric)', "insert into recipe_ingredients values (1, 79086), (2, 26011.5), (3, null), (4, 0.1), (5, 1e-7), (6, '12.50'), (7, 9007199254740993)"]);
+
+  it('forward: mixed storage classes land as exact numerics, verification passes', async () => {
+    const db = await create(ddl);
+    expect((await executeClone(options(db, mixed(), manifest))).outcome).toBe('committed');
+    const rows = (await db.admin.query<{ id: string; q: string | null }>('select id::text, quantity::text as q from recipe_ingredients order by id')).rows;
+    expect(rows).toEqual([
+      { id: '1', q: '79086' },
+      { id: '2', q: '26011.5' },
+      { id: '3', q: null },
+      { id: '4', q: '0.1' },
+      { id: '5', q: '0.0000001' },
+      { id: '6', q: '12.5' },
+      { id: '7', q: '9007199254740993' },
+    ]);
+  });
+
+  it('without the option the same rows are refused by table.column and nothing is written', async () => {
+    const db = await create(ddl);
+    const strict = manifestOf({ version: 1, tables: { recipe_ingredients: table({ id: int, quantity: { codec: 'decimal-as-string', nullable: true } }) } });
+    expect(await refusalOf(() => executeClone(options(db, mixed(), strict)))).toEqual({ code: 'codec-invalid', table: 'recipe_ingredients', column: 'quantity' });
+    expect(((await db.admin.query('select count(*)::int as n from recipe_ingredients')).rows[0] as { n: number }).n).toBe(0);
+  });
+});
+
 describe('executeClone: copy:false tables', () => {
   it('never copies, verifies, counts or truncates a skipped ledger: its rows on both sides stay exactly where they are', async () => {
     const manifest = manifestOf({ version: 1, tables: { items: table({ id: int, name: text }), _ledger: { copy: false, reason: 'migration ledger' } } });

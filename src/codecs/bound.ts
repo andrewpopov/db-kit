@@ -35,6 +35,8 @@ function implementationFor(spec: ColumnSpec): CodecImpl {
       return IMPLEMENTATIONS.timestampEpoch(1_000_000n, 's', spec.preserveInteger, spec.acceptSqliteDatetimeText);
     case 'timestamp-epoch-ms':
       return IMPLEMENTATIONS.timestampEpoch(1_000n, 'ms', spec.preserveInteger, spec.acceptSqliteDatetimeText);
+    case 'decimal-as-string':
+      return IMPLEMENTATIONS.decimalAsString(spec.acceptSqliteNumeric);
     case 'json-text':
       return IMPLEMENTATIONS.jsonText(jsonPgType(spec));
     case 'text':
@@ -43,7 +45,6 @@ function implementationFor(spec: ColumnSpec): CodecImpl {
     case 'integer':
     case 'bigint':
     case 'real':
-    case 'decimal-as-string':
     case 'boolean':
     case 'blob':
     case 'uuid-text':
