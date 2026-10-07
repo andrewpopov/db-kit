@@ -400,3 +400,89 @@ describe('acceptSqliteDatetimeText (a column Prisma wrote as epoch integers and 
     expect(() => parseCodecManifest({ version: 1, tables: { t: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, at: { codec: 'timestamp-epoch-ms', acceptSqliteDatetimeText: true, preserveInteger: false, nullable: false } } } } })).not.toThrow();
   });
 });
+
+describe('acceptSqliteNumeric (a Prisma Decimal on a SQLite NUMERIC-affinity column: INTEGER, REAL and NULL rows)', () => {
+  const numeric = { codec: 'decimal-as-string', acceptSqliteNumeric: true, nullable: true } as const;
+
+  it("TEXT keeps today's rules; INTEGER (number or bigint) is its exact decimal string, bigint-safe past 2^53", () => {
+    const codec = codecOf(numeric);
+    expect(codec.toPostgres('12.50')).toBe('12.50');
+    expect(codec.toPostgres(79086)).toBe('79086');
+    expect(codec.toPostgres(-5)).toBe('-5');
+    expect(codec.toPostgres(79086n)).toBe('79086');
+    expect(codec.toPostgres(9007199254740993n)).toBe('9007199254740993');
+    expect(codec.toPostgres(-(2n ** 63n))).toBe('-9223372036854775808');
+    expect(codec.toPostgres(null)).toBeNull();
+  });
+
+  it('REAL is the shortest round-trip decimal of the double, never an exponent', () => {
+    const codec = codecOf(numeric);
+    const cases: [number, string][] = [
+      [26011.5, '26011.5'], [0.1, '0.1'], [0.30000000000000004, '0.30000000000000004'], [-2.25, '-2.25'], [26011, '26011'],
+      [1e-7, '0.0000001'], [1.5e-7, '0.00000015'], [-1.25e-10, '-0.000000000125'], [1e21, '1000000000000000000000'], [1.5e21, '1500000000000000000000'],
+      [2 ** 53, '9007199254740992'], [1.7976931348623157e308, '17976931348623157' + '0'.repeat(292)], [5e-324, '0.' + '0'.repeat(323) + '5'],
+    ];
+    for (const [real, text] of cases) expect(codec.toPostgres(real), String(real)).toBe(text);
+  });
+
+  it('refuses NaN, Infinity and negative zero by table.column; a non-numeric TEXT is still invalid', () => {
+    const codec = codecOf(numeric, 'recipe_ingredients', 'quantity');
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0, '1e5', 'abc', Buffer.from('1')]) {
+      const error = errorOf(() => codec.toPostgres(bad));
+      expect({ table: error.table, column: error.column }, String(bad)).toEqual({ table: 'recipe_ingredients', column: 'quantity' });
+    }
+    expect(errorOf(() => codec.toPostgres(Number.NaN)).code).toBe('CODEC_INVALID');
+    expect(errorOf(() => codec.toPostgres(Number.POSITIVE_INFINITY)).code).toBe('CODEC_INVALID');
+    expect(errorOf(() => codec.toPostgres(-0)).code).toBe('CODEC_LOSSY');
+    expect(errorOf(() => codec.toPostgres('abc')).code).toBe('CODEC_INVALID');
+  });
+
+  it('a SQLite REAL 0.1 and a Postgres numeric 0.1 (or 0.10, 0.1000) are the same canonical value; so are 2.0, 2 and 2.00', () => {
+    const codec = codecOf(numeric);
+    expect(codec.canonical(0.1, 'sqlite')).toBe('0.1');
+    for (const pg of ['0.1', '0.10', '0.1000']) expect(codec.canonical(pg, 'postgres')).toBe(codec.canonical(0.1, 'sqlite'));
+    expect(codec.canonical(2, 'sqlite')).toBe(codec.canonical('2.00', 'postgres'));
+    expect(codec.canonical(2n, 'sqlite')).toBe(codec.canonical(2.0, 'sqlite'));
+    expect(codec.canonical(1e-7, 'sqlite')).toBe(codec.canonical('0.0000001', 'postgres'));
+    expect(codec.canonical(0.1, 'sqlite')).not.toBe(codec.canonical('0.2', 'postgres'));
+    expect(codec.canonical(null, 'sqlite')).toBeNull();
+  });
+
+  it('reverse: an exactly representable decimal is written back as a SQLite number (int64 integer as bigint, else a double)', () => {
+    const codec = codecOf(numeric);
+    expect(codec.toSqlite('79086')).toBe(79086n);
+    expect(codec.toSqlite('79086.00')).toBe(79086n);
+    expect(codec.toSqlite('-12')).toBe(-12n);
+    expect(codec.toSqlite('0.00')).toBe(0n);
+    expect(codec.toSqlite('9007199254740993')).toBe(9007199254740993n);
+    expect(codec.toSqlite('26011.5')).toBe(26011.5);
+    expect(codec.toSqlite('0.10')).toBe(0.1);
+    expect(codec.toSqlite('0.0000001')).toBe(1e-7);
+    expect(codec.toSqlite('1500000000000000000000')).toBe(1.5e21);
+    for (const real of [0.1, 26011.5, 1e-7, 1.5e21]) expect(codec.toSqlite(codec.toPostgres(real))).toBe(real);
+  });
+
+  it('reverse: a decimal a double cannot hold exactly is CODEC_LOSSY by table.column, never a silent storage change', () => {
+    const codec = codecOf(numeric, 'recipe_ingredients', 'quantity');
+    for (const lossy of ['0.1000000000000000055511151231257827', '1.00000000000000001', '12345678901234567890.5', '9223372036854775808', '1' + '0'.repeat(400)]) {
+      const error = errorOf(() => codec.toSqlite(lossy));
+      expect({ code: error.code, table: error.table, column: error.column }, lossy).toEqual({ code: 'CODEC_LOSSY', table: 'recipe_ingredients', column: 'quantity' });
+    }
+    expect(errorOf(() => codec.toSqlite('NaN')).code).toBe('CODEC_INVALID');
+  });
+
+  it('without the option INTEGER and REAL are refused and TEXT is unchanged', () => {
+    const plain = codecOf({ codec: 'decimal-as-string', nullable: false });
+    for (const bad of [79086, 26011.5, 79086n]) expect(errorOf(() => plain.toPostgres(bad)).code).toBe('CODEC_INVALID');
+    expect(plain.toPostgres('12.50')).toBe('12.50');
+    expect(plain.toSqlite('12.50')).toBe('12.50');
+  });
+
+  it('manifest parsing: the option defaults to false and is refused on any other codec', () => {
+    const parsed = parseCodecManifest({ version: 1, tables: { t: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, q: { codec: 'decimal-as-string', nullable: true } } } } });
+    expect(parsed.tables.t?.columns.q).toMatchObject({ codec: 'decimal-as-string', acceptSqliteNumeric: false });
+    for (const codec of ['real', 'integer', 'text', 'bigint', 'timestamp-epoch-ms']) {
+      expect(() => parseCodecManifest({ version: 1, tables: { t: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, q: { codec, acceptSqliteNumeric: true, nullable: true } } } } }), codec).toThrow(DbKitError);
+    }
+  });
+});

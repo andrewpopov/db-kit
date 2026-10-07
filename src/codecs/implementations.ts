@@ -410,14 +410,7 @@ export const IMPLEMENTATIONS = {
     toPg: identity,
     canonical: (value) => (Object.is(value, -0) ? '-0' : String(value)),
   }),
-  'decimal-as-string': implement<string>({
-    pgTypes: ['numeric'],
-    fromSqlite: toDecimalString,
-    fromPg: toDecimalString,
-    toSqlite: identity,
-    toPg: identity,
-    canonical: canonicalDecimal,
-  }),
+  'decimal-as-string': decimalAsString(false),
   boolean: implement<boolean>({
     pgTypes: ['boolean'],
     fromSqlite: (value) => {
@@ -455,10 +448,46 @@ export const IMPLEMENTATIONS = {
     toPg: identity,
     canonical: identity,
   }),
+  decimalAsString,
   timestampIso,
   timestampEpoch,
   jsonText,
 };
+
+/** SQLite NUMERIC affinity stores a decimal as INTEGER or REAL: its exact decimal text (a double's shortest round-trip digits, never an exponent). */
+function numericToDecimalString(value: unknown): string {
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value !== 'number') return toDecimalString(value);
+  if (Number.isNaN(value) || !Number.isFinite(value)) return reject('invalid', 'NaN/Infinity cannot be a decimal');
+  if (Object.is(value, -0)) return reject('lossy', 'negative zero cannot be a decimal (numeric has no -0)');
+  return Number.isSafeInteger(value) ? String(value) : canonicalJsonNumber(String(value));
+}
+
+/** A decimal back into a SQLite number, only when that is exact: an int64 integer, or a double whose own shortest digits are the decimal. */
+function decimalToNumeric(text: string): SqliteValue {
+  const canonical = canonicalDecimal(text);
+  if (/^-?\d+$/.test(canonical)) {
+    const integer = BigInt(canonical);
+    if (integer >= INT64_MIN && integer <= INT64_MAX) return integer;
+  }
+  const number = Number(canonical);
+  if (!Number.isFinite(number) || numericToDecimalString(number) !== canonical) {
+    return reject('lossy', 'decimal is not exactly representable as a SQLite number; refusing to change its storage');
+  }
+  return number;
+}
+
+/** `acceptSqliteNumeric`: also accept INTEGER/REAL storage (a Prisma `Decimal` on a NUMERIC-affinity column) and write exactly-representable decimals back as numbers. */
+function decimalAsString(acceptSqliteNumeric: boolean): CodecImpl {
+  return implement<string>({
+    pgTypes: ['numeric'],
+    fromSqlite: acceptSqliteNumeric ? numericToDecimalString : toDecimalString,
+    fromPg: toDecimalString,
+    toSqlite: acceptSqliteNumeric ? decimalToNumeric : identity,
+    toPg: identity,
+    canonical: canonicalDecimal,
+  });
+}
 
 /** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim, duplicate keys included); only `jsonb` normalises, and refuses duplicate keys. */
 function jsonText(pgType: 'text' | 'json' | 'jsonb'): CodecImpl {

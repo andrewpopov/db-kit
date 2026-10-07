@@ -16,7 +16,7 @@ export const ColumnSpecSchema = z.discriminatedUnion('codec', [
     z.strictObject({ codec: z.literal('integer'), ...columnFields }),
     z.strictObject({ codec: z.literal('bigint'), ...columnFields }),
     z.strictObject({ codec: z.literal('real'), ...columnFields }),
-    z.strictObject({ codec: z.literal('decimal-as-string'), ...columnFields }),
+    z.strictObject({ codec: z.literal('decimal-as-string'), acceptSqliteNumeric: z.boolean().default(false), ...columnFields }),
     z.strictObject({ codec: z.literal('boolean'), ...columnFields }),
     z.strictObject({ codec: z.literal('timestamp-iso'), preserveText: z.boolean().default(true), ...columnFields }),
     z.strictObject({ codec: z.literal('timestamp-epoch-s'), preserveInteger: z.boolean().default(true), acceptSqliteDatetimeText: z.boolean().default(false), ...columnFields }).refine(datetimeTextNeedsConversion, DATETIME_TEXT_MESSAGE),

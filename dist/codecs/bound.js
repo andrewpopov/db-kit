@@ -10,6 +10,8 @@ function implementationFor(spec) {
             return IMPLEMENTATIONS.timestampEpoch(1000000n, 's', spec.preserveInteger, spec.acceptSqliteDatetimeText);
         case 'timestamp-epoch-ms':
             return IMPLEMENTATIONS.timestampEpoch(1000n, 'ms', spec.preserveInteger, spec.acceptSqliteDatetimeText);
+        case 'decimal-as-string':
+            return IMPLEMENTATIONS.decimalAsString(spec.acceptSqliteNumeric);
         case 'json-text':
             return IMPLEMENTATIONS.jsonText(jsonPgType(spec));
         case 'text':
@@ -18,7 +20,6 @@ function implementationFor(spec) {
         case 'integer':
         case 'bigint':
         case 'real':
-        case 'decimal-as-string':
         case 'boolean':
         case 'blob':
         case 'uuid-text':

@@ -32,10 +32,13 @@ export declare const IMPLEMENTATIONS: {
     'uuid-text': CodecImpl;
     'timestamp-naive': CodecImpl;
     'date-text': CodecImpl;
+    decimalAsString: typeof decimalAsString;
     timestampIso: typeof timestampIso;
     timestampEpoch: typeof timestampEpoch;
     jsonText: typeof jsonText;
 };
+/** `acceptSqliteNumeric`: also accept INTEGER/REAL storage (a Prisma `Decimal` on a NUMERIC-affinity column) and write exactly-representable decimals back as numbers. */
+declare function decimalAsString(acceptSqliteNumeric: boolean): CodecImpl;
 /** `text` and `json` keep the stored text exactly (Postgres `json` stores its input verbatim, duplicate keys included); only `jsonb` normalises, and refuses duplicate keys. */
 declare function jsonText(pgType: 'text' | 'json' | 'jsonb'): CodecImpl;
 export {};
