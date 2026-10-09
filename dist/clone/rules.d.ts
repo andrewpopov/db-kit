@@ -22,9 +22,11 @@ export interface GateResult {
  * What must hold of the copied tables whichever direction the data flows: no partitioning or inheritance, no RLS, the
  * real primary key and NULL rules match the manifest, keys sortable the same way on both sides, no key to a skipped
  * table. `requireOwnership` is for a target that is written (constraints are dropped and re-added), not for a source.
+ * `skippedMayReferenceCopied` is for the reverse direction only (see the foreign-key check below).
  */
 export declare function evaluateShape(facts: TargetFacts, manifest: CodecManifest, options: {
     requireOwnership: boolean;
+    skippedMayReferenceCopied?: boolean;
 }): Refusal[];
 /** Turn catalog facts into refusals: the schema gate, capabilities, emptiness and operational checks of PKG-177 D5-D10 and A1/A3-A5/A7. */
 export declare function evaluateGate(facts: TargetFacts, manifest: CodecManifest, options: RuleOptions): GateResult;

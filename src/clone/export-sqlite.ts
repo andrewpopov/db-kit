@@ -125,7 +125,11 @@ export async function exportToSqlite(options: ExportToSqliteOptions): Promise<Ex
   const workDir = mkdtempSync(join(tmpdir(), 'db-kit-export-'));
   try {
     const templatePath = join(workDir, 'template.db');
-    const templateRowsCleared = await buildExportTemplate(app, templatePath).catch((error: unknown) => refuse(toRefusal(error, 'sqlite-template-invalid')));
+    // The app's own message (such as which setting it needs) reaches the operator; the CLI scrubs any URL in it.
+    const templateRowsCleared = await buildExportTemplate(app, templatePath).catch((error: unknown) => {
+      if (error instanceof CloneRefusal) throw error;
+      throw new CloneRefusal({ code: 'sqlite-template-invalid' }, `the app's SQLite template could not be built: ${error instanceof Error ? error.message : String(error)}`);
+    });
     const expected = new Set(await Promise.resolve(app.ledger.expected()).catch((error: unknown) => refuse(toRefusal(error))));
     assertLedgersMatch(await postgresLedgerIds(app, options), expected);
     const result = await reverseClone({

@@ -180,6 +180,18 @@ describe('exportToSqlite', () => {
     expect(seen).not.toBe(target);
   }, 120_000);
 
+  it("a failing template build refuses sqlite-template-invalid and shows the app's message", async () => {
+    const db = await create();
+    const target = outputPath();
+    const failing = fakeApp({ buildTemplate: () => { throw new Error('set APP_BALANCE_SOURCE to the live file'); } });
+    const result = await run(['export-sqlite', target, '--writers-stopped', '--confirm-production', confirmationOf(db)], db, failing);
+    expect(result.code).toBe(1);
+    const error = JSON.parse(result.err) as { refusal: unknown; error: string };
+    expect(error.refusal).toEqual({ code: 'sqlite-template-invalid' });
+    expect(error.error).toContain('set APP_BALANCE_SOURCE to the live file');
+    expect(existsSync(target)).toBe(false);
+  });
+
   it('a ledger-query failure is a bare refusal, never a driver message', async () => {
     const db = await create();
     const failure = await exportToSqlite({ app: fakeApp({ ledger: { query: 'select id from no_such_table', expected: () => LEDGER_IDS } }), source: db.config, toSqlitePath: outputPath(), writersStopped: true, confirmProduction: confirmationOf(db) }).catch((error: unknown) => error);

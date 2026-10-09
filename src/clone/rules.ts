@@ -37,8 +37,9 @@ const sameList = (a: readonly string[], b: readonly string[]): boolean => a.leng
  * What must hold of the copied tables whichever direction the data flows: no partitioning or inheritance, no RLS, the
  * real primary key and NULL rules match the manifest, keys sortable the same way on both sides, no key to a skipped
  * table. `requireOwnership` is for a target that is written (constraints are dropped and re-added), not for a source.
+ * `skippedMayReferenceCopied` is for the reverse direction only (see the foreign-key check below).
  */
-export function evaluateShape(facts: TargetFacts, manifest: CodecManifest, options: { requireOwnership: boolean }): Refusal[] {
+export function evaluateShape(facts: TargetFacts, manifest: CodecManifest, options: { requireOwnership: boolean; skippedMayReferenceCopied?: boolean }): Refusal[] {
   const refusals: Refusal[] = [];
   const refuse = (refusal: Refusal): void => void refusals.push(refusal);
   const copied = new Map(facts.tables.map((table) => [table.oid, table.name]));
@@ -60,11 +61,16 @@ export function evaluateShape(facts: TargetFacts, manifest: CodecManifest, optio
   }
 
   // A skipped table (`copy: false`) is never loaded or verified, so a key between it and a copied table could not be honoured either way.
+  // Reverse differs for a skipped table that references a copied one: the SQLite target's skipped tables keep only the template's
+  // content and reverseClone runs `PRAGMA foreign_key_check` after the load, so a real violation there is still refused.
+  // A copied table referencing a skipped one stays refused: the skipped parent rows are not loaded.
   const isSkipped = (schema: string, name: string): boolean => schema === TARGET_SCHEMA && Object.hasOwn(manifest.skipped, name);
   for (const fk of facts.foreignKeys) {
     const tableCopied = copied.has(fk.tableOid);
     const refCopied = copied.has(fk.refOid);
-    if ((tableCopied && isSkipped(fk.refSchema, fk.refTable)) || (refCopied && isSkipped(fk.tableSchema, fk.table))) {
+    const copiedToSkipped = tableCopied && isSkipped(fk.refSchema, fk.refTable);
+    const skippedToCopied = refCopied && isSkipped(fk.tableSchema, fk.table);
+    if (copiedToSkipped || (skippedToCopied && !options.skippedMayReferenceCopied)) {
       refuse({ code: 'foreign-key-to-skipped-table', table: tableCopied ? fk.table : fk.refTable, object: fk.name });
     }
   }

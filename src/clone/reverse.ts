@@ -158,7 +158,7 @@ async function runReverse(options: ReverseOptions): Promise<ReverseResult> {
     const skippedKeys = sqliteSkippedKeyRefusals(db, manifest, introspectSqlite(db));
     if (skippedKeys[0]) return refuse(skippedKeys[0]);
     const facts = await readTargetFacts(client, Object.keys(manifest.tables), identity.serverVersionNum);
-    const shape = evaluateShape(facts, manifest, { requireOwnership: false });
+    const shape = evaluateShape(facts, manifest, { requireOwnership: false, skippedMayReferenceCopied: true });
     if (shape[0]) return refuse(shape[0]);
     for (const name of Object.keys(manifest.tables)) {
       if (db.prepare(`select 1 from ${quoteIdent(name)} limit 1`).get() !== undefined) refuse({ code: 'sqlite-template-not-empty', table: name });

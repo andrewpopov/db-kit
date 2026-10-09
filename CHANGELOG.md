@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.1
+
+- exportToSqlite shows the app's own message when its template build fails (still refusal sqlite-template-invalid)
+  Describe the user-facing change in one short paragraph before releasing.
+- reverseClone and exportToSqlite no longer refuse a Postgres foreign key from a copy:false table to a copied table (copied to skipped is still refused)
+  Describe the user-facing change in one short paragraph before releasing.
+
 ## 0.5.0
 
 - prismaExportApp (@andrewpopov/db-kit/prisma) and drizzleExportApp (@andrewpopov/db-kit/drizzle): ready-made SqliteExportApp builders for Prisma and Drizzle apps.
