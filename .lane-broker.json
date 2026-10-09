@@ -4,7 +4,8 @@
   "lanes": {
     "default": {
       "weight": 1,
-      "cpuCores": 2,
+      "cpuCores": 4,
+      "minCpuCores": 2,
       "memoryBytes": 2147483648,
       "remote": true,
       "remoteDeps": ["."]
