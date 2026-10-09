@@ -150,6 +150,16 @@ Where `embedded-postgres` has actually run (the spike): macOS arm64 with Node 24
 - **Verify** every table row by row against a second read of the same Postgres snapshot, in the same key order (Postgres `COLLATE "C"`, SQLite `COLLATE BINARY`), on the same canonical encoding as the forward clone.
 - **Only then**: fsync, a no-clobber hard-link of the temp file into place (a file that appeared meanwhile is never overwritten), fsync of the directory, and `<path>.receipt.json`, itself linked without clobbering (run id, source identity, manifest hash, the file's sha256, per-table counts and digests). The database file is the commit point. Numeric options (`fetchRows`, `batchBytes`, `lockTimeoutMs`, `commitPollMs`, `maxSlotRetentionBytes`, `--commit-poll-seconds`) are validated up front and refused as `invalid-option` naming the option (`fetchRows: 0` would otherwise "verify" empty tables). A killed process leaves no file at the target path, only a hidden `.<name>.db-kit-tmp-*` file you can delete.
 
+#### Export for an app: `exportToSqlite` / `runExportSqliteCli`
+
+The swap-back path every app shares, from `@andrewpopov/db-kit/clone`. The app supplies a `SqliteExportApp`: its forward `manifest`, optional `skipTables` (name to reason, such as its migration ledger), `buildTemplate(path)` (write an EMPTY file with the app's own SQLite schema), `ledger: { query, expected }` (SQL returning an `id` column on Postgres, and the ids the code defines) and an optional `smoke(copyPath)`.
+
+db-kit does the rest, in order: refuse unless `writersStopped` (`writers-not-stopped`, before anything is built); build the template in a `db-kit-export-*` temp directory and delete any rows a migration seeded into a copied table (`templateRowsCleared`; skipped tables keep theirs); compare the Postgres ledger with `expected()` and refuse on any difference (`ledger-mismatch`, message names the ids missing from Postgres and unknown to the code); run `reverseClone`; then call `smoke` on a COPY of the published file. A throwing smoke is the warning `smoke-open-failed: <message>`, never a refusal. The temp directory is always removed.
+
+`runExportSqliteCli(argv, io, env, app, { sourceUrlEnv })` (default `DATABASE_URL`) runs `export-sqlite <out.db> [--writers-stopped] [--dry-run] [--confirm-production host:port/db]` and `sqlite-template <path>` (refuses an existing path). Success is one JSON line on `io.out`: `{ ok, command, outcome, path, receiptPath, tables, rows, sequences, warnings, templateRowsCleared }`. A refusal or error is one JSON line on `io.err`: `{ ok: false, command, error, refusal? }`, with the URL and password scrubbed. Exit codes: `0` written or dry run verified, `1` refused or failed, `2` usage, `3` file in place but `warnings` is non-empty.
+
+Swap procedure: stop and drain every writer; export to a path outside the live location; move the old SQLite file (and its `-wal`/`-shm`) aside and put the export in place; point the app at SQLite; restart it and check health.
+
 ## URL forms
 
 **SQLite**, `file:` and `sqlite:` are equivalent:

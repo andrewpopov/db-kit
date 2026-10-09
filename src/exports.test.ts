@@ -16,6 +16,14 @@ describe('testing entry', () => {
   });
 });
 
+describe('clone entry', () => {
+  it('exports the SQLite export API next to reverseClone', async () => {
+    const clone = await import('./clone.js');
+    expect(Object.keys(clone)).toEqual(expect.arrayContaining(['reverseClone', 'exportToSqlite', 'buildExportTemplate', 'reverseManifestFor', 'runExportSqliteCli']));
+    expect(clone.CLONE_REFUSAL_CODES).toContain('ledger-mismatch');
+  });
+});
+
 describe('package surface', () => {
   it('root entry exports the documented API and does not pull in drizzle', () => {
     expect(Object.keys(root).sort()).toEqual(

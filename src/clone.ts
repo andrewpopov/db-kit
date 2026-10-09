@@ -8,3 +8,5 @@ export { executeClone, type CloneResult, type ExecuteOptions, type ProgressEvent
 export { resultToJson, resultToText } from './clone/render.js';
 export { reverseClone, type ReverseOptions, type ReverseResult, type ReverseTableResult } from './clone/reverse.js';
 export { reverseToText } from './clone/render.js';
+export { buildExportTemplate, exportToSqlite, reverseManifestFor, type ExportToSqliteOptions, type ExportToSqliteResult, type SqliteExportApp } from './clone/export-sqlite.js';
+export { runExportSqliteCli, type ExportCliOptions } from './clone/export-cli.js';
