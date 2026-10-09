@@ -23,7 +23,7 @@ function fail(message) {
   process.exit(1);
 }
 
-const REQUIRED_FILES = ['dist/index.js', 'dist/index.d.ts', 'dist/drizzle.js', 'dist/drizzle.d.ts', 'dist/clone.js', 'dist/clone.d.ts', 'dist/bin.js', 'dist/testing.js', 'dist/testing.d.ts'];
+const REQUIRED_FILES = ['dist/index.js', 'dist/index.d.ts', 'dist/drizzle.js', 'dist/drizzle.d.ts', 'dist/prisma.js', 'dist/prisma.d.ts', 'dist/clone.js', 'dist/clone.d.ts', 'dist/bin.js', 'dist/testing.js', 'dist/testing.d.ts'];
 
 const workDir = mkdtempSync(join(tmpdir(), 'db-kit-verify-'));
 try {
@@ -56,6 +56,8 @@ try {
     import { openDatabase, parseDatabaseUrl, describe } from '${pkg.name}';
     import { drizzleFor } from '${pkg.name}/drizzle';
     import { planClone } from '${pkg.name}/clone';
+    import { prismaExportApp } from '${pkg.name}/prisma';
+    if (typeof prismaExportApp !== 'function') throw new Error('prisma subpath export missing');
     if (typeof planClone !== 'function') throw new Error('clone subpath export missing');
     const { startTestPostgres, compareSchemas } = await import('${pkg.name}/testing');
     if (typeof compareSchemas !== 'function') throw new Error('testing subpath export missing');

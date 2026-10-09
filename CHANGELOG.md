@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.0
+
+- prismaExportApp (@andrewpopov/db-kit/prisma) and drizzleExportApp (@andrewpopov/db-kit/drizzle): ready-made SqliteExportApp builders for Prisma and Drizzle apps.
+  Describe the user-facing change in one short paragraph before releasing.
+
 ## 0.4.0
 
 - Postgres to SQLite export for apps: exportToSqlite and runExportSqliteCli on @andrewpopov/db-kit/clone, with a ledger-mismatch refusal
