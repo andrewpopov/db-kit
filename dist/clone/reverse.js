@@ -103,7 +103,7 @@ async function runReverse(options) {
         if (skippedKeys[0])
             return refuse(skippedKeys[0]);
         const facts = await readTargetFacts(client, Object.keys(manifest.tables), identity.serverVersionNum);
-        const shape = evaluateShape(facts, manifest, { requireOwnership: false });
+        const shape = evaluateShape(facts, manifest, { requireOwnership: false, skippedMayReferenceCopied: true });
         if (shape[0])
             return refuse(shape[0]);
         for (const name of Object.keys(manifest.tables)) {

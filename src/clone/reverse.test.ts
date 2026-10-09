@@ -371,6 +371,17 @@ describe('reverseClone: review follow-ups', () => {
     const fromLedger = liveSqlite(dir, ['create table items(id integer primary key, name text not null, l integer)', 'create table ledger(id integer primary key, item integer references items(id))']);
     expect(await refusalOf(() => reverseClone(options(db, manifest, fromLedger)))).toMatchObject({ code: 'foreign-key-to-skipped-table', table: 'items' });
   });
+
+  it('a Postgres skipped table referencing a copied table is exported; a copied table referencing a skipped one is refused', async () => {
+    const manifest = manifestOf({ version: 1, tables: { items: { primaryKey: ['id'], columns: { id: { codec: 'integer', nullable: false }, name: { codec: 'text', nullable: false }, l: { codec: 'integer', nullable: true } } }, ledger: { copy: false, reason: 'derived' } } });
+    const template = liveSqlite(dir, ['create table items(id integer primary key, name text not null, l integer)', 'create table ledger(id integer primary key)']);
+    const skippedToCopied = await create(['create table items(id bigint primary key, name text not null, l bigint)', 'create table ledger(id bigint primary key, item bigint references items(id))', "insert into items values (1, 'a', null), (2, 'b', null)"]);
+    const result = await reverseClone(options(skippedToCopied, manifest, template));
+    expect(result.outcome).toBe('written');
+    expect(result.tables.map((t) => [t.table, t.rows])).toEqual([['items', 2]]);
+    const copiedToSkipped = await create(['create table ledger(id bigint primary key)', 'create table items(id bigint primary key, name text not null, l bigint constraint items_l_fkey references ledger(id))']);
+    expect(await refusalOf(() => reverseClone(options(copiedToSkipped, manifest, template)))).toMatchObject({ code: 'foreign-key-to-skipped-table', table: 'items', object: 'items_l_fkey' });
+  });
 });
 
 describe('reverseClone: a column that mixed epoch integers and SQLite datetime() text', () => {
