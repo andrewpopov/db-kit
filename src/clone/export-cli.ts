@@ -15,6 +15,32 @@ export interface ExportCliOptions {
   sourceUrlEnv?: string;
 }
 
+// Prisma client-side pool/timing params: they change how the app connects, never which database or rows are read.
+const PRISMA_CLIENT_PARAMS = ['connection_limit', 'pool_timeout', 'connect_timeout', 'socket_timeout', 'statement_cache_size', 'pgbouncer'];
+
+/**
+ * The app's `DATABASE_URL` as `parseDatabaseUrl` can read it: a Postgres URL loses the Prisma client params and `schema=public`.
+ * Any other `schema` is refused (the export reads `public`); every other param stays so `parseDatabaseUrl` still refuses it.
+ * A URL that is not Postgres, or that has nothing to drop, is returned byte for byte.
+ */
+export function exportSourceUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') return raw;
+  const schema = url.searchParams.get('schema');
+  if (schema !== null && schema !== 'public') {
+    throw new CloneRefusal({ code: 'source-url-invalid' }, `the export reads the public schema; DATABASE_URL selects schema=${schema}`);
+  }
+  const droppable = [...PRISMA_CLIENT_PARAMS, 'schema'];
+  if (!droppable.some((name) => url.searchParams.has(name))) return raw;
+  for (const name of droppable) url.searchParams.delete(name);
+  return url.toString();
+}
+
 /** The URL and its password (raw and decoded) replaced outright, then any other `scheme://user:password@` userinfo masked. */
 export function scrubMessage(text: string, url: string | undefined): string {
   let scrubbed = text;
@@ -66,9 +92,10 @@ export async function runExportSqliteCli(argv: readonly string[], io: CliIo, env
       return 0;
     }
     if (url === undefined || url === '') return refuse({ code: 'source-url-missing' });
+    const exportedUrl = exportSourceUrl(url);
     let source;
     try {
-      source = parseDatabaseUrl(url);
+      source = parseDatabaseUrl(exportedUrl);
     } catch {
       return refuse({ code: 'source-url-invalid' });
     }

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.2
+
+- export-sqlite accepts Prisma client params (connection_limit, pool_timeout, schema=public and similar) in DATABASE_URL
+  Describe the user-facing change in one short paragraph before releasing.
+
 ## 0.5.1
 
 - exportToSqlite shows the app's own message when its template build fails (still refusal sqlite-template-invalid)
