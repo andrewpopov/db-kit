@@ -31,6 +31,10 @@
       "types": "./dist/drizzle.d.ts",
       "default": "./dist/drizzle.js"
     },
+    "./prisma": {
+      "types": "./dist/prisma.d.ts",
+      "default": "./dist/prisma.js"
+    },
     "./clone": {
       "types": "./dist/clone.d.ts",
       "default": "./dist/clone.js"
@@ -97,10 +101,14 @@
     "@types/pg-copy-streams": "^1.2.5",
     "drizzle-orm": "^0.45.0",
     "embedded-postgres": "17.10.0-beta.17",
+    "prisma": "^6.19.3",
     "typescript": "^5.5.0",
     "vitest": "^4.1.10"
   },
   "bin": {
     "db-kit": "dist/bin.js"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.2"
   }
 }

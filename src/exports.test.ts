@@ -24,6 +24,19 @@ describe('clone entry', () => {
   });
 });
 
+describe('builder entries', () => {
+  it('exports prismaExportApp on the prisma subpath and drizzleExportApp on the drizzle subpath, neither on the root', async () => {
+    expect(Object.keys(await import('./prisma.js'))).toEqual(['prismaExportApp']);
+    expect(Object.keys(await import('./drizzle.js'))).toEqual(expect.arrayContaining(['drizzleFor', 'drizzleExportApp']));
+    expect(Object.keys(root)).not.toContain('prismaExportApp');
+    expect(Object.keys(root)).not.toContain('drizzleExportApp');
+  });
+
+  it('maps the prisma subpath in package.json exports', () => {
+    expect((pkg as unknown as { exports: Record<string, unknown> }).exports['./prisma']).toEqual({ types: './dist/prisma.d.ts', default: './dist/prisma.js' });
+  });
+});
+
 describe('package surface', () => {
   it('root entry exports the documented API and does not pull in drizzle', () => {
     expect(Object.keys(root).sort()).toEqual(

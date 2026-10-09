@@ -158,6 +158,28 @@ db-kit does the rest, in order: refuse unless `writersStopped` (`writers-not-sto
 
 `runExportSqliteCli(argv, io, env, app, { sourceUrlEnv })` (default `DATABASE_URL`) runs `export-sqlite <out.db> [--writers-stopped] [--dry-run] [--confirm-production host:port/db]` and `sqlite-template <path>` (refuses an existing path). Success is one JSON line on `io.out`: `{ ok, command, outcome, path, receiptPath, tables, rows, sequences, warnings, templateRowsCleared }`. A refusal or error is one JSON line on `io.err`: `{ ok: false, command, error, refusal? }`, with the URL and password scrubbed. Exit codes: `0` written or dry run verified, `1` refused or failed, `2` usage, `3` file in place but `warnings` is non-empty.
 
+**Prisma apps** (`@andrewpopov/db-kit/prisma`, no Prisma dependency added to db-kit): `prismaExportApp({ manifest, sqliteSchemaPath, postgresMigrationsDir, prismaBin?, databaseUrlEnv?, skipTables?, smoke? })` builds the template with `prisma migrate deploy` against the SQLite schema (`file:<path>` through `databaseUrlEnv`, default `DATABASE_URL`) and compares `_prisma_migrations` (finished, not rolled back) with the migration directories under `postgresMigrationsDir`. `_prisma_migrations` is skipped by default.
+
+```ts
+import { runExportSqliteCli } from '@andrewpopov/db-kit/clone';
+import { prismaExportApp } from '@andrewpopov/db-kit/prisma';
+import { manifest } from './manifest.js';
+
+const app = prismaExportApp({ manifest, sqliteSchemaPath: 'prisma/schema.prisma', postgresMigrationsDir: 'prisma/postgres/migrations' });
+process.exitCode = await runExportSqliteCli(process.argv.slice(2), { out: console.log, err: console.error }, process.env, app);
+```
+
+**Drizzle apps** (`@andrewpopov/db-kit/drizzle`): `drizzleExportApp({ manifest, sqliteMigrationsFolder, postgresMigrationsFolder, migrationsTable?, migrationsSchema? })` applies the SQLite migrations with Drizzle's own migrator and compares the Postgres ledger's `created_at` with the `when` of every entry in the Postgres `meta/_journal.json`. The ledger table (default `__drizzle_migrations`, schema `drizzle`) is skipped by default.
+
+```ts
+import { runExportSqliteCli } from '@andrewpopov/db-kit/clone';
+import { drizzleExportApp } from '@andrewpopov/db-kit/drizzle';
+import { manifest } from './manifest.js';
+
+const app = drizzleExportApp({ manifest, sqliteMigrationsFolder: 'drizzle/sqlite', postgresMigrationsFolder: 'drizzle/pg' });
+process.exitCode = await runExportSqliteCli(process.argv.slice(2), { out: console.log, err: console.error }, process.env, app);
+```
+
 Swap procedure: stop and drain every writer; export to a path outside the live location; move the old SQLite file (and its `-wal`/`-shm`) aside and put the export in place; point the app at SQLite; restart it and check health.
 
 ## URL forms
