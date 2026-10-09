@@ -6,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { manifestOf, scratchDir, targetDatabase, type TargetDatabase } from '../test-support/clone-fixture.js';
 import { startThrowawayPostgres, type ThrowawayPostgres } from '../test-support/embedded-pg.js';
 import { postgresUrl } from '../testing/postgres.js';
+import { parseDatabaseUrl } from '../url.js';
 import { CloneRefusal } from './errors.js';
-import { runExportSqliteCli, scrubMessage } from './export-cli.js';
+import { exportSourceUrl, runExportSqliteCli, scrubMessage } from './export-cli.js';
 import { buildExportTemplate, exportToSqlite, reverseManifestFor, type SqliteExportApp } from './export-sqlite.js';
 
 let server: ThrowawayPostgres;
@@ -221,6 +222,36 @@ describe('scrubMessage', () => {
   });
 });
 
+describe('exportSourceUrl', () => {
+  const base = 'postgresql://app:p%40ss%3A%2F%3F%23w%25@db.example:5432/app';
+
+  it.each(['connection_limit=5', 'pool_timeout=10', 'connect_timeout=5', 'socket_timeout=7', 'statement_cache_size=0', 'pgbouncer=true', 'schema=public'])('strips %s', (param) => {
+    expect(exportSourceUrl(`${base}?${param}`)).toBe(base);
+  });
+
+  it('keeps sslmode and the percent-encoded password while stripping the rest', () => {
+    const cleaned = exportSourceUrl(`${base}?sslmode=require&connection_limit=5&pool_timeout=10&schema=public`);
+    expect(cleaned).toBe(`${base}?sslmode=require`);
+    expect(new URL(cleaned).password).toBe('p%40ss%3A%2F%3F%23w%25');
+  });
+
+  it('refuses a schema other than public, naming it', () => {
+    expect(() => exportSourceUrl(`${base}?schema=other`)).toThrow(CloneRefusal);
+    expect(() => exportSourceUrl(`${base}?schema=other`)).toThrow(/schema=other/);
+  });
+
+  it('leaves an unknown param, so parseDatabaseUrl still refuses it', () => {
+    const cleaned = exportSourceUrl(`${base}?connection_limit=5&application_name=x`);
+    expect(cleaned).toBe(`${base}?application_name=x`);
+    expect(() => parseDatabaseUrl(cleaned)).toThrow();
+  });
+
+  it('returns a non-postgres or unparseable URL unchanged', () => {
+    expect(exportSourceUrl('file:x.db?connection_limit=5')).toBe('file:x.db?connection_limit=5');
+    expect(exportSourceUrl('nonsense')).toBe('nonsense');
+  });
+});
+
 describe('CLI usage and sqlite-template', () => {
   it('exits 2 on a usage error and 1 on a missing, invalid or non-postgres source URL', async () => {
     const db = await create();
@@ -231,6 +262,28 @@ describe('CLI usage and sqlite-template', () => {
     expect(JSON.parse((await run(['export-sqlite', target, '--writers-stopped'], db, fakeApp(), {})).err)).toMatchObject({ refusal: { code: 'source-url-missing' } });
     expect(JSON.parse((await run(['export-sqlite', target, '--writers-stopped'], db, fakeApp(), { DATABASE_URL: 'nonsense' })).err)).toMatchObject({ refusal: { code: 'source-url-invalid' } });
     expect(JSON.parse((await run(['export-sqlite', target, '--writers-stopped'], db, fakeApp(), { DATABASE_URL: 'file:x.db' })).err)).toMatchObject({ refusal: { code: 'source-not-postgres' } });
+  });
+
+  it('exports through a DATABASE_URL carrying Prisma client params', async () => {
+    const db = await create();
+    const target = outputPath();
+    const env = { DATABASE_URL: `${postgresUrl(db.config)}&connection_limit=5&pool_timeout=10&schema=public` };
+    const result = await run(['export-sqlite', target, '--writers-stopped', '--confirm-production', confirmationOf(db)], db, fakeApp(), env);
+    expect(result.err).toBe('');
+    expect(result.code).toBe(0);
+    const exported = new Database(target, { readonly: true });
+    expect(exported.prepare('select count(*) as n from events').get()).toEqual({ n: 3 });
+    exported.close();
+  }, 120_000);
+
+  it('refuses a DATABASE_URL selecting another schema', async () => {
+    const db = await create();
+    const env = { DATABASE_URL: `${postgresUrl(db.config)}&schema=other` };
+    const result = await run(['export-sqlite', outputPath(), '--writers-stopped'], db, fakeApp(), env);
+    expect(result.code).toBe(1);
+    const failure = JSON.parse(result.err) as { error: string; refusal: { code: string } };
+    expect(failure.refusal.code).toBe('source-url-invalid');
+    expect(failure.error).toContain('schema');
   });
 
   it('reads the URL from a custom environment variable', async () => {
