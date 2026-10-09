@@ -8,3 +8,5 @@ export { executeClone } from './clone/execute.js';
 export { resultToJson, resultToText } from './clone/render.js';
 export { reverseClone } from './clone/reverse.js';
 export { reverseToText } from './clone/render.js';
+export { buildExportTemplate, exportToSqlite, reverseManifestFor } from './clone/export-sqlite.js';
+export { runExportSqliteCli } from './clone/export-cli.js';

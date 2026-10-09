@@ -78,6 +78,7 @@ export const CLONE_REFUSAL_CODES = [
   'sqlite-write-failed',
   'invalid-option',
   'unexpected-value-format',
+  'ledger-mismatch',
   // execution
   'lock-timeout',
   'load-failed',
@@ -107,8 +108,9 @@ export function describeRefusal(refusal: Refusal): string {
 export class CloneRefusal extends DbKitError {
   readonly refusal: Refusal;
 
-  constructor(refusal: Refusal) {
-    super('CLONE_REFUSED', describeRefusal(refusal));
+  /** `message` defaults to `describeRefusal`; a caller may supply a longer one (ids, never a value or URL) while `refusal` stays the bare code. */
+  constructor(refusal: Refusal, message: string = describeRefusal(refusal)) {
+    super('CLONE_REFUSED', message);
     this.name = 'CloneRefusal';
     this.refusal = refusal;
   }
