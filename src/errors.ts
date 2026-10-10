@@ -8,7 +8,8 @@ export type DbKitErrorCode =
   | 'CODEC_INVALID'
   | 'CODEC_LOSSY'
   | 'CLONE_REFUSED'
-  | 'CLONE_OUTCOME';
+  | 'CLONE_OUTCOME'
+  | 'TEST_POSTGRES_START_FAILED';
 
 /**
  * Typed error for everything db-kit raises itself. Messages are built from

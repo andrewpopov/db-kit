@@ -39,5 +39,7 @@ export declare function postgresUrl(config: PostgresConfig, database?: string): 
  * peer `embedded-postgres` (a devDependency of the app, never of production). Torn down by `stop()`.
  */
 export declare function startTestPostgres(options?: StartTestPostgresOptions): Promise<TestPostgres>;
+/** Internal seam (not re-exported from `./testing`): `pickPort` is injectable so a test can force a port collision. */
+export declare function startTestPostgresWith(options: StartTestPostgresOptions, pickPort: () => Promise<number>): Promise<TestPostgres>;
 /** A fresh `test_<random>` database on `server`; `release()` drops it. */
 export declare function createTestDatabase(server: TestPostgres): Promise<TestDatabase>;

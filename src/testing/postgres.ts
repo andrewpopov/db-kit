@@ -200,13 +200,39 @@ function reapOnExit(live: LiveServer): () => void {
  * peer `embedded-postgres` (a devDependency of the app, never of production). Torn down by `stop()`.
  */
 export async function startTestPostgres(options: StartTestPostgresOptions = {}): Promise<TestPostgres> {
+  return startTestPostgresWith(options, freePort);
+}
+
+const MAX_START_ATTEMPTS = 3;
+const LOG_TAIL_LINES = 40;
+const BIND_CONFLICT = /could not bind|Address already in use|could not create any TCP\/IP sockets/i;
+
+/** Internal seam (not re-exported from `./testing`): `pickPort` is injectable so a test can force a port collision. */
+export async function startTestPostgresWith(options: StartTestPostgresOptions, pickPort: () => Promise<number>): Promise<TestPostgres> {
   const EmbeddedPostgres = await loadEmbeddedPostgres();
   const started = performance.now();
   const dir = mkdtempSync(join(tmpdir(), 'db-kit-pg-'));
-  const port = await freePort();
   const password = 'correct-horse-battery';
   const tlsFlags: string[] = [];
   let caPem: string | undefined;
+  const logLines: string[] = [];
+  const capture = (chunk: unknown): void => {
+    logLines.push(...String(chunk).split('\n').filter((line) => line.trim() !== ''));
+    if (logLines.length > LOG_TAIL_LINES) logLines.splice(0, logLines.length - LOG_TAIL_LINES);
+  };
+  const build = (port: number) =>
+    new EmbeddedPostgres({
+      initdbFlags: localeFlags(options.locale),
+      // listen_addresses first so a caller's extraFlags can still override it; 127.0.0.1 only, because the client connects there
+      postgresFlags: ['-c', 'listen_addresses=127.0.0.1', ...tlsFlags, ...(options.extraFlags ?? [])],
+      databaseDir: join(dir, 'data'),
+      user: 'postgres',
+      password,
+      port,
+      persistent: true,
+      onLog: capture,
+      onError: capture,
+    });
   try {
     if (options.tls) {
       const cert = join(dir, 'server.crt');
@@ -215,37 +241,39 @@ export async function startTestPostgres(options: StartTestPostgresOptions = {}):
       tlsFlags.push('-c', 'ssl=on', '-c', `ssl_cert_file=${cert}`, '-c', `ssl_key_file=${key}`);
       caPem = readFileSync(cert, 'utf8');
     }
-    const server = new EmbeddedPostgres({
-      initdbFlags: localeFlags(options.locale),
-      postgresFlags: [...tlsFlags, ...(options.extraFlags ?? [])],
-      databaseDir: join(dir, 'data'),
-      user: 'postgres',
-      password,
-      port,
-      persistent: true,
-      onLog: () => undefined,
-      onError: () => undefined,
-    });
-    await server.initialise();
-    await server.start();
-    const live: LiveServer = { dir, child: (server as unknown as { process?: ChildProcess }).process };
-    const unregister = reapOnExit(live);
-    const config: PostgresConfig = { dialect: 'postgres', host: '127.0.0.1', port, database: 'postgres', user: 'postgres', password, sslmode: 'disable' };
-    return {
-      url: postgresUrl(config),
-      config,
-      caPem,
-      startupMs: Math.round(performance.now() - started),
-      async stop() {
-        live.child?.ref(); // stop() awaits the child's exit, which an unref'd child cannot wake the loop for
-        try {
-          await server.stop();
-        } finally {
-          unregister();
-          rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    };
+    await build(0).initialise();
+    // The port is chosen after initdb (seconds under load), then start() is retried on a fresh port if something took it meanwhile.
+    for (let attempt = 1; ; attempt++) {
+      const port = await pickPort();
+      logLines.length = 0;
+      const server = build(port);
+      try {
+        await server.start();
+      } catch {
+        const child = (server as unknown as { process?: ChildProcess }).process;
+        if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        if (attempt < MAX_START_ATTEMPTS && BIND_CONFLICT.test(logLines.join('\n'))) continue;
+        throw new DbKitError('TEST_POSTGRES_START_FAILED', `Test Postgres failed to start on port ${port} after ${attempt} attempt(s); postgres log tail:\n${logLines.join('\n')}`);
+      }
+      const live: LiveServer = { dir, child: (server as unknown as { process?: ChildProcess }).process };
+      const unregister = reapOnExit(live);
+      const config: PostgresConfig = { dialect: 'postgres', host: '127.0.0.1', port, database: 'postgres', user: 'postgres', password, sslmode: 'disable' };
+      return {
+        url: postgresUrl(config),
+        config,
+        caPem,
+        startupMs: Math.round(performance.now() - started),
+        async stop() {
+          live.child?.ref(); // stop() awaits the child's exit, which an unref'd child cannot wake the loop for
+          try {
+            await server.stop();
+          } finally {
+            unregister();
+            rmSync(dir, { recursive: true, force: true });
+          }
+        },
+      };
+    }
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     throw error;
