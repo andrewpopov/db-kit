@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { parseArgs } from 'node:util';
+import { existsSync, readFileSync } from 'node:fs';
+import { parseArgs, parseEnv } from 'node:util';
 import { parseDatabaseUrl } from '../url.js';
 import type { CliIo } from './cli.js';
 import { CloneRefusal, refuse, toRefusal, type Refusal } from './errors.js';
@@ -7,7 +7,7 @@ import { buildExportTemplate, exportToSqlite, type SqliteExportApp } from './exp
 
 const DEFAULT_SOURCE_URL_ENV = 'DATABASE_URL';
 
-const USAGE = `usage: <cmd> export-sqlite <out.db> [--writers-stopped] [--dry-run] [--confirm-production host:port/db]
+const USAGE = `usage: <cmd> export-sqlite <out.db> [--writers-stopped] [--dry-run] [--confirm-production host:port/db] [--env-file <path>]
        <cmd> sqlite-template <path>`;
 
 export interface ExportCliOptions {
@@ -39,6 +39,19 @@ export function exportSourceUrl(raw: string): string {
   if (!droppable.some((name) => url.searchParams.has(name))) return raw;
   for (const name of droppable) url.searchParams.delete(name);
   return url.toString();
+}
+
+/** The source URL from an env file, parsed like an app's dotenv loader (an unquoted `&` is data, not a shell operator). Never touches `process.env`. */
+function sourceUrlFromEnvFile(path: string, variable: string): string {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    throw new CloneRefusal({ code: 'source-url-missing' }, `cannot read the env file ${path}`);
+  }
+  const value = parseEnv(text)[variable];
+  if (value === undefined || value === '') throw new CloneRefusal({ code: 'source-url-missing' }, `the env file ${path} does not set ${variable}`);
+  return value;
 }
 
 /** The URL and its password (raw and decoded) replaced outright, then any other `scheme://user:password@` userinfo masked. */
@@ -84,13 +97,15 @@ export async function runExportSqliteCli(argv: readonly string[], io: CliIo, env
     return 2;
   }
   const output = positionals[0] as string;
-  const url = env[opts.sourceUrlEnv ?? DEFAULT_SOURCE_URL_ENV];
+  const sourceUrlEnv = opts.sourceUrlEnv ?? DEFAULT_SOURCE_URL_ENV;
+  let url = env[sourceUrlEnv];
   try {
     if (command === 'sqlite-template') {
       if (existsSync(output)) refuse({ code: 'sqlite-target-exists' });
       io.out(JSON.stringify({ ok: true, command, templateRowsCleared: await buildExportTemplate(app, output) }));
       return 0;
     }
+    if (values['env-file'] !== undefined) url = sourceUrlFromEnvFile(values['env-file'], sourceUrlEnv);
     if (url === undefined || url === '') return refuse({ code: 'source-url-missing' });
     const exportedUrl = exportSourceUrl(url);
     let source;
@@ -140,5 +155,6 @@ const parseCommand = (args: readonly string[]) =>
       'dry-run': { type: 'boolean' },
       'writers-stopped': { type: 'boolean' },
       'confirm-production': { type: 'string' },
+      'env-file': { type: 'string' },
     },
   });
