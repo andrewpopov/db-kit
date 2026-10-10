@@ -310,6 +310,75 @@ describe('CLI usage and sqlite-template', () => {
   });
 });
 
+describe('--env-file', () => {
+  const envFile = (name: string, body: string): string => {
+    const path = join(dir, name);
+    writeFileSync(path, body);
+    return path;
+  };
+
+  it('round trip: reads an unquoted URL with & from the file when the environment has none', async () => {
+    const db = await create();
+    const file = envFile('prod.env', `# production\nNAME="quoted value"\nDATABASE_URL=${postgresUrl(db.config)}&connection_limit=5\nOTHER=1\n`);
+    const target = outputPath();
+    const result = await run(['export-sqlite', target, '--writers-stopped', '--confirm-production', confirmationOf(db), '--env-file', file], db, fakeApp(), {});
+    expect(result.err).toBe('');
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({ ok: true, outcome: 'written', rows: 5 });
+    const exported = new Database(target, { readonly: true });
+    expect(exported.prepare('select count(*) as n from events').get()).toEqual({ n: 3 });
+    exported.close();
+  }, 120_000);
+
+  it('the file wins over a bogus DATABASE_URL in the environment', async () => {
+    const db = await create();
+    const file = envFile('wins.env', `DATABASE_URL=${postgresUrl(db.config)}\n`);
+    const result = await run(['export-sqlite', outputPath(), '--writers-stopped', '--confirm-production', confirmationOf(db), '--env-file', file], db, fakeApp(), { DATABASE_URL: 'postgresql://nobody:nope@127.0.0.1:1/none' });
+    expect(result.err).toBe('');
+    expect(result.code).toBe(0);
+  }, 120_000);
+
+  it('a file without the variable refuses source-url-missing, naming the file and the variable', async () => {
+    const db = await create();
+    const file = envFile('empty.env', 'OTHER=1\n');
+    const result = await run(['export-sqlite', outputPath(), '--writers-stopped', '--env-file', file], db);
+    expect(result.code).toBe(1);
+    const failure = JSON.parse(result.err) as { error: string; refusal: { code: string } };
+    expect(failure.refusal.code).toBe('source-url-missing');
+    expect(failure.error).toContain(file);
+    expect(failure.error).toContain('DATABASE_URL');
+  });
+
+  it('an unreadable path refuses source-url-missing without a stack', async () => {
+    const db = await create();
+    const missing = join(dir, 'no-such.env');
+    const result = await run(['export-sqlite', outputPath(), '--writers-stopped', '--env-file', missing], db);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.err)).toMatchObject({ refusal: { code: 'source-url-missing' } });
+    expect(result.err).toContain(missing);
+    expect(result.err).not.toMatch(/\bat .*\(|ENOENT/);
+  });
+
+  it('never prints the password read from the file', async () => {
+    const db = await create();
+    const url = `${postgresUrl(db.config)}&connection_limit=5`;
+    const file = envFile('leak.env', `DATABASE_URL=${url}\n`);
+    const leaky = fakeApp({ smoke: () => { throw new Error(`could not open ${url} with password ${db.config.password}`); } });
+    const result = await run(['export-sqlite', outputPath(), '--writers-stopped', '--confirm-production', confirmationOf(db), '--env-file', file], db, leaky, {});
+    expect(result.code).toBe(3);
+    expect(result.out).toContain('[redacted]');
+    expect(result.out).not.toContain(db.config.password);
+    expect(result.out).not.toContain(url);
+  }, 120_000);
+
+  it('sqlite-template accepts and ignores it', async () => {
+    const db = await create();
+    const target = join(dir, 'template-envfile.db');
+    const result = await run(['sqlite-template', target, '--env-file', join(dir, 'ignored.env')], db);
+    expect(result.code).toBe(0);
+  });
+});
+
 describe('reverseManifestFor and buildExportTemplate', () => {
   it('declares the skipped tables and drops a copied table that the app skips', () => {
     const manifest = reverseManifestFor(fakeApp({ skipTables: { migrations_ledger: 'ledger', events: 'not reversible' } }));

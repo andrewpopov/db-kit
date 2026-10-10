@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.0
+
+- export-sqlite --env-file <path> reads the source URL from an app env file (dotenv-style parse), so an unquoted & in DATABASE_URL no longer needs shell sourcing
+  Describe the user-facing change in one short paragraph before releasing.
+
 ## 0.5.2
 
 - export-sqlite accepts Prisma client params (connection_limit, pool_timeout, schema=public and similar) in DATABASE_URL

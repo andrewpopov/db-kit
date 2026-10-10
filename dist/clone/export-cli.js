@@ -1,10 +1,10 @@
-import { existsSync } from 'node:fs';
-import { parseArgs } from 'node:util';
+import { existsSync, readFileSync } from 'node:fs';
+import { parseArgs, parseEnv } from 'node:util';
 import { parseDatabaseUrl } from '../url.js';
 import { CloneRefusal, refuse, toRefusal } from './errors.js';
 import { buildExportTemplate, exportToSqlite } from './export-sqlite.js';
 const DEFAULT_SOURCE_URL_ENV = 'DATABASE_URL';
-const USAGE = `usage: <cmd> export-sqlite <out.db> [--writers-stopped] [--dry-run] [--confirm-production host:port/db]
+const USAGE = `usage: <cmd> export-sqlite <out.db> [--writers-stopped] [--dry-run] [--confirm-production host:port/db] [--env-file <path>]
        <cmd> sqlite-template <path>`;
 // Prisma client-side pool/timing params: they change how the app connects, never which database or rows are read.
 const PRISMA_CLIENT_PARAMS = ['connection_limit', 'pool_timeout', 'connect_timeout', 'socket_timeout', 'statement_cache_size', 'pgbouncer'];
@@ -33,6 +33,20 @@ export function exportSourceUrl(raw) {
     for (const name of droppable)
         url.searchParams.delete(name);
     return url.toString();
+}
+/** The source URL from an env file, parsed like an app's dotenv loader (an unquoted `&` is data, not a shell operator). Never touches `process.env`. */
+function sourceUrlFromEnvFile(path, variable) {
+    let text;
+    try {
+        text = readFileSync(path, 'utf8');
+    }
+    catch {
+        throw new CloneRefusal({ code: 'source-url-missing' }, `cannot read the env file ${path}`);
+    }
+    const value = parseEnv(text)[variable];
+    if (value === undefined || value === '')
+        throw new CloneRefusal({ code: 'source-url-missing' }, `the env file ${path} does not set ${variable}`);
+    return value;
 }
 /** The URL and its password (raw and decoded) replaced outright, then any other `scheme://user:password@` userinfo masked. */
 export function scrubMessage(text, url) {
@@ -81,7 +95,8 @@ export async function runExportSqliteCli(argv, io, env, app, opts = {}) {
         return 2;
     }
     const output = positionals[0];
-    const url = env[opts.sourceUrlEnv ?? DEFAULT_SOURCE_URL_ENV];
+    const sourceUrlEnv = opts.sourceUrlEnv ?? DEFAULT_SOURCE_URL_ENV;
+    let url = env[sourceUrlEnv];
     try {
         if (command === 'sqlite-template') {
             if (existsSync(output))
@@ -89,6 +104,8 @@ export async function runExportSqliteCli(argv, io, env, app, opts = {}) {
             io.out(JSON.stringify({ ok: true, command, templateRowsCleared: await buildExportTemplate(app, output) }));
             return 0;
         }
+        if (values['env-file'] !== undefined)
+            url = sourceUrlFromEnvFile(values['env-file'], sourceUrlEnv);
         if (url === undefined || url === '')
             return refuse({ code: 'source-url-missing' });
         const exportedUrl = exportSourceUrl(url);
@@ -138,5 +155,6 @@ const parseCommand = (args) => parseArgs({
         'dry-run': { type: 'boolean' },
         'writers-stopped': { type: 'boolean' },
         'confirm-production': { type: 'string' },
+        'env-file': { type: 'string' },
     },
 });
