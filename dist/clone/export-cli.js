@@ -1,3 +1,4 @@
+import { X509Certificate } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { parseArgs, parseEnv } from 'node:util';
 import { parseDatabaseUrl } from '../url.js';
@@ -45,8 +46,13 @@ function readEnvFile(path) {
     }
     return parseEnv(text);
 }
-/** The PEM at `path` (the value of `variable`); refuses `tls-ca-unreadable` naming both, never the contents. */
+const PEM_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+/** A value safe to name in a message: a single-line path. Inline PEM (a quoted multiline env value) is never echoed. */
+const looksLikePath = (value) => !value.includes('\n') && !value.includes('\r') && !value.includes('-----BEGIN');
+/** The PEM at `path` (the value of `variable`); refuses `tls-ca-unreadable` naming the variable (and the path only when it is one), never the contents. */
 function readTlsCa(variable, path) {
+    if (!looksLikePath(path))
+        throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} is not a file path`);
     let pem;
     try {
         pem = readFileSync(path, 'utf8');
@@ -54,8 +60,17 @@ function readTlsCa(variable, path) {
     catch {
         throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which cannot be read`);
     }
-    if (!pem.includes('-----BEGIN CERTIFICATE-----'))
-        throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which holds no PEM certificate`);
+    const parses = (block) => {
+        try {
+            new X509Certificate(block);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    };
+    if (!(pem.match(PEM_BLOCK) ?? []).some(parses))
+        throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which holds no parseable PEM certificate`);
     return pem;
 }
 /** The URL and its password (raw and decoded) replaced outright, then any other `scheme://user:password@` userinfo masked. */
@@ -117,9 +132,10 @@ export async function runExportSqliteCli(argv, io, env, app, opts = {}) {
         let caPath = opts.tlsCaFileEnv === undefined ? undefined : env[opts.tlsCaFileEnv];
         if (values['env-file'] !== undefined) {
             const fileEnv = readEnvFile(values['env-file']);
-            url = fileEnv[sourceUrlEnv];
-            if (url === undefined || url === '')
+            const fileUrl = fileEnv[sourceUrlEnv];
+            if (fileUrl === undefined || fileUrl === '')
                 throw new CloneRefusal({ code: 'source-url-missing' }, `the env file ${values['env-file']} does not set ${sourceUrlEnv}`);
+            url = fileUrl;
             if (opts.tlsCaFileEnv !== undefined)
                 caPath = fileEnv[opts.tlsCaFileEnv];
         }

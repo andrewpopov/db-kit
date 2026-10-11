@@ -1,3 +1,4 @@
+import { X509Certificate } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { parseArgs, parseEnv } from 'node:util';
 import { parseDatabaseUrl } from '../url.js';
@@ -15,7 +16,8 @@ export interface ExportCliOptions {
   sourceUrlEnv?: string;
   /**
    * The environment variable holding the path of a PEM CA file for the source connection (a private CA behind
-   * `sslmode=verify-ca`/`verify-full`). Read from the same place as the URL: `--env-file` when given, else the environment.
+   * `sslmode=verify-ca`/`verify-full`). Read from the same place as the URL: `--env-file` when given (and then ONLY the file, so a
+   * file without it means unset even if the environment has it), else the environment.
    */
   tlsCaFileEnv?: string;
 }
@@ -57,15 +59,29 @@ function readEnvFile(path: string): NodeJS.Dict<string> {
   return parseEnv(text);
 }
 
-/** The PEM at `path` (the value of `variable`); refuses `tls-ca-unreadable` naming both, never the contents. */
+const PEM_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+/** A value safe to name in a message: a single-line path. Inline PEM (a quoted multiline env value) is never echoed. */
+const looksLikePath = (value: string): boolean => !value.includes('\n') && !value.includes('\r') && !value.includes('-----BEGIN');
+
+/** The PEM at `path` (the value of `variable`); refuses `tls-ca-unreadable` naming the variable (and the path only when it is one), never the contents. */
 function readTlsCa(variable: string, path: string): string {
+  if (!looksLikePath(path)) throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} is not a file path`);
   let pem: string;
   try {
     pem = readFileSync(path, 'utf8');
   } catch {
     throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which cannot be read`);
   }
-  if (!pem.includes('-----BEGIN CERTIFICATE-----')) throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which holds no PEM certificate`);
+  const parses = (block: string): boolean => {
+    try {
+      new X509Certificate(block);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!(pem.match(PEM_BLOCK) ?? []).some(parses)) throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which holds no parseable PEM certificate`);
   return pem;
 }
 
@@ -123,8 +139,9 @@ export async function runExportSqliteCli(argv: readonly string[], io: CliIo, env
     let caPath = opts.tlsCaFileEnv === undefined ? undefined : env[opts.tlsCaFileEnv];
     if (values['env-file'] !== undefined) {
       const fileEnv = readEnvFile(values['env-file']);
-      url = fileEnv[sourceUrlEnv];
-      if (url === undefined || url === '') throw new CloneRefusal({ code: 'source-url-missing' }, `the env file ${values['env-file']} does not set ${sourceUrlEnv}`);
+      const fileUrl = fileEnv[sourceUrlEnv];
+      if (fileUrl === undefined || fileUrl === '') throw new CloneRefusal({ code: 'source-url-missing' }, `the env file ${values['env-file']} does not set ${sourceUrlEnv}`);
+      url = fileUrl;
       if (opts.tlsCaFileEnv !== undefined) caPath = fileEnv[opts.tlsCaFileEnv];
     }
     if (url === undefined || url === '') return refuse({ code: 'source-url-missing' });

@@ -5,7 +5,8 @@ export interface ExportCliOptions {
     sourceUrlEnv?: string;
     /**
      * The environment variable holding the path of a PEM CA file for the source connection (a private CA behind
-     * `sslmode=verify-ca`/`verify-full`). Read from the same place as the URL: `--env-file` when given, else the environment.
+     * `sslmode=verify-ca`/`verify-full`). Read from the same place as the URL: `--env-file` when given (and then ONLY the file, so a
+     * file without it means unset even if the environment has it), else the environment.
      */
     tlsCaFileEnv?: string;
 }
