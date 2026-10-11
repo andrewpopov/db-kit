@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.2
+
+- export-sqlite CLI passes a private CA through: new `tlsCaFileEnv` option names an env var holding a PEM CA file path
+  Refuses `tls-ca-unreadable` (unreadable or non-PEM file) and `tls-ca-missing` (verify-ca/verify-full URL, variable unset).
+
 ## 0.6.1
 
 - startTestPostgres throws a typed error with postgres's log and survives a port collision
