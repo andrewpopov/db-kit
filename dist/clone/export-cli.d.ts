@@ -3,6 +3,11 @@ import { type SqliteExportApp } from './export-sqlite.js';
 export interface ExportCliOptions {
     /** The environment variable holding the Postgres source URL. Default `DATABASE_URL`. */
     sourceUrlEnv?: string;
+    /**
+     * The environment variable holding the path of a PEM CA file for the source connection (a private CA behind
+     * `sslmode=verify-ca`/`verify-full`). Read from the same place as the URL: `--env-file` when given, else the environment.
+     */
+    tlsCaFileEnv?: string;
 }
 /**
  * The app's `DATABASE_URL` as `parseDatabaseUrl` can read it: a Postgres URL loses the Prisma client params and `schema=public`.

@@ -78,6 +78,9 @@ export const CLONE_REFUSAL_CODES = [
     'invalid-option',
     'unexpected-value-format',
     'ledger-mismatch',
+    // the export CLI's source TLS CA file: set but unreadable or not PEM / required by sslmode but not set
+    'tls-ca-unreadable',
+    'tls-ca-missing',
     // execution
     'lock-timeout',
     'load-failed',

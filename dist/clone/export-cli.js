@@ -34,8 +34,8 @@ export function exportSourceUrl(raw) {
         url.searchParams.delete(name);
     return url.toString();
 }
-/** The source URL from an env file, parsed like an app's dotenv loader (an unquoted `&` is data, not a shell operator). Never touches `process.env`. */
-function sourceUrlFromEnvFile(path, variable) {
+/** An env file parsed like an app's dotenv loader (an unquoted `&` is data, not a shell operator). Never touches `process.env`. */
+function readEnvFile(path) {
     let text;
     try {
         text = readFileSync(path, 'utf8');
@@ -43,10 +43,20 @@ function sourceUrlFromEnvFile(path, variable) {
     catch {
         throw new CloneRefusal({ code: 'source-url-missing' }, `cannot read the env file ${path}`);
     }
-    const value = parseEnv(text)[variable];
-    if (value === undefined || value === '')
-        throw new CloneRefusal({ code: 'source-url-missing' }, `the env file ${path} does not set ${variable}`);
-    return value;
+    return parseEnv(text);
+}
+/** The PEM at `path` (the value of `variable`); refuses `tls-ca-unreadable` naming both, never the contents. */
+function readTlsCa(variable, path) {
+    let pem;
+    try {
+        pem = readFileSync(path, 'utf8');
+    }
+    catch {
+        throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which cannot be read`);
+    }
+    if (!pem.includes('-----BEGIN CERTIFICATE-----'))
+        throw new CloneRefusal({ code: 'tls-ca-unreadable' }, `${variable} points at ${path}, which holds no PEM certificate`);
+    return pem;
 }
 /** The URL and its password (raw and decoded) replaced outright, then any other `scheme://user:password@` userinfo masked. */
 export function scrubMessage(text, url) {
@@ -104,8 +114,15 @@ export async function runExportSqliteCli(argv, io, env, app, opts = {}) {
             io.out(JSON.stringify({ ok: true, command, templateRowsCleared: await buildExportTemplate(app, output) }));
             return 0;
         }
-        if (values['env-file'] !== undefined)
-            url = sourceUrlFromEnvFile(values['env-file'], sourceUrlEnv);
+        let caPath = opts.tlsCaFileEnv === undefined ? undefined : env[opts.tlsCaFileEnv];
+        if (values['env-file'] !== undefined) {
+            const fileEnv = readEnvFile(values['env-file']);
+            url = fileEnv[sourceUrlEnv];
+            if (url === undefined || url === '')
+                throw new CloneRefusal({ code: 'source-url-missing' }, `the env file ${values['env-file']} does not set ${sourceUrlEnv}`);
+            if (opts.tlsCaFileEnv !== undefined)
+                caPath = fileEnv[opts.tlsCaFileEnv];
+        }
         if (url === undefined || url === '')
             return refuse({ code: 'source-url-missing' });
         const exportedUrl = exportSourceUrl(url);
@@ -118,9 +135,15 @@ export async function runExportSqliteCli(argv, io, env, app, opts = {}) {
         }
         if (source.dialect !== 'postgres')
             return refuse({ code: 'source-not-postgres' });
+        const verifies = source.sslmode === 'verify-ca' || source.sslmode === 'verify-full';
+        if (opts.tlsCaFileEnv !== undefined && verifies && (caPath === undefined || caPath === '')) {
+            throw new CloneRefusal({ code: 'tls-ca-missing' }, `the source URL uses sslmode=${source.sslmode} and ${opts.tlsCaFileEnv} is not set`);
+        }
+        const tlsCa = caPath === undefined || caPath === '' || opts.tlsCaFileEnv === undefined ? undefined : readTlsCa(opts.tlsCaFileEnv, caPath);
         const result = await exportToSqlite({
             app,
             source,
+            ...(tlsCa === undefined ? {} : { tlsCa }),
             toSqlitePath: output,
             writersStopped: values['writers-stopped'] === true,
             dryRun: values['dry-run'] === true,
