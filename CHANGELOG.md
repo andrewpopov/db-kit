@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.0
+
+- startTestPostgres accepts onServerLog(line, stream) to receive every server log line for the cluster's lifetime
+  Describe the user-facing change in one short paragraph before releasing.
+
 ## 0.6.2
 
 - export-sqlite CLI passes a private CA through: new `tlsCaFileEnv` option names an env var holding a PEM CA file path

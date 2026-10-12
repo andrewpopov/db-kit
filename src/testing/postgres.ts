@@ -20,6 +20,11 @@ export interface StartTestPostgresOptions {
   locale?: string;
   /** Serve TLS with a self-signed certificate (needs `openssl`); `san` is its subjectAltName. Default: no TLS. */
   tls?: { san?: string };
+  /**
+   * Called for every non-empty server log line for the cluster's whole lifetime (including start attempts), tagged with the
+   * stream it arrived on. A throwing listener is ignored: it cannot break startup or the cluster.
+   */
+  onServerLog?: (line: string, stream: 'stdout' | 'stderr') => void;
 }
 
 export interface TestPostgres {
@@ -216,9 +221,17 @@ export async function startTestPostgresWith(options: StartTestPostgresOptions, p
   const tlsFlags: string[] = [];
   let caPem: string | undefined;
   const logLines: string[] = [];
-  const capture = (chunk: unknown): void => {
-    logLines.push(...String(chunk).split('\n').filter((line) => line.trim() !== ''));
+  const capture = (chunk: unknown, stream: 'stdout' | 'stderr'): void => {
+    const lines = String(chunk).split('\n').filter((line) => line.trim() !== '');
+    logLines.push(...lines);
     if (logLines.length > LOG_TAIL_LINES) logLines.splice(0, logLines.length - LOG_TAIL_LINES);
+    for (const line of lines) {
+      try {
+        options.onServerLog?.(line, stream);
+      } catch {
+        // a listener must never break the server's output handling
+      }
+    }
   };
   const build = (port: number) =>
     new EmbeddedPostgres({
@@ -230,8 +243,8 @@ export async function startTestPostgresWith(options: StartTestPostgresOptions, p
       password,
       port,
       persistent: true,
-      onLog: capture,
-      onError: capture,
+      onLog: (chunk) => capture(chunk, 'stdout'),
+      onError: (chunk) => capture(chunk, 'stderr'),
     });
   try {
     if (options.tls) {
