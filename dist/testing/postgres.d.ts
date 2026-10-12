@@ -13,6 +13,11 @@ export interface StartTestPostgresOptions {
     tls?: {
         san?: string;
     };
+    /**
+     * Called for every non-empty server log line for the cluster's whole lifetime (including start attempts), tagged with the
+     * stream it arrived on. A throwing listener is ignored: it cannot break startup or the cluster.
+     */
+    onServerLog?: (line: string, stream: 'stdout' | 'stderr') => void;
 }
 export interface TestPostgres {
     /** URL of the `postgres` maintenance database as the superuser. Prefer `createTestDatabase` for a test's own database. */

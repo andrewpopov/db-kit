@@ -77,3 +77,29 @@ describe('startTestPostgres start failures', () => {
     }
   }, 180_000);
 });
+
+describe('startTestPostgres onServerLog', () => {
+  it('receives tagged server log lines, and a throwing listener breaks neither start nor queries', async () => {
+    const seen: Array<{ line: string; stream: string }> = [];
+    const pg = await startTestPostgres({
+      onServerLog: (line, stream) => {
+        seen.push({ line, stream });
+        throw new Error('listener failure');
+      },
+    });
+    try {
+      const client = new Client({ ...pg.config, ssl: false });
+      await client.connect();
+      try {
+        expect((await client.query('select 1 as one')).rows[0]).toEqual({ one: 1 });
+      } finally {
+        await client.end();
+      }
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((entry) => entry.line.trim() !== '' && (entry.stream === 'stdout' || entry.stream === 'stderr'))).toBe(true);
+      expect(seen.some((entry) => /ready to accept connections/.test(entry.line))).toBe(true);
+    } finally {
+      await pg.stop();
+    }
+  }, 180_000);
+});

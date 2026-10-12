@@ -169,10 +169,19 @@ export async function startTestPostgresWith(options, pickPort) {
     const tlsFlags = [];
     let caPem;
     const logLines = [];
-    const capture = (chunk) => {
-        logLines.push(...String(chunk).split('\n').filter((line) => line.trim() !== ''));
+    const capture = (chunk, stream) => {
+        const lines = String(chunk).split('\n').filter((line) => line.trim() !== '');
+        logLines.push(...lines);
         if (logLines.length > LOG_TAIL_LINES)
             logLines.splice(0, logLines.length - LOG_TAIL_LINES);
+        for (const line of lines) {
+            try {
+                options.onServerLog?.(line, stream);
+            }
+            catch {
+                // a listener must never break the server's output handling
+            }
+        }
     };
     const build = (port) => new EmbeddedPostgres({
         initdbFlags: localeFlags(options.locale),
@@ -183,8 +192,8 @@ export async function startTestPostgresWith(options, pickPort) {
         password,
         port,
         persistent: true,
-        onLog: capture,
-        onError: capture,
+        onLog: (chunk) => capture(chunk, 'stdout'),
+        onError: (chunk) => capture(chunk, 'stderr'),
     });
     try {
         if (options.tls) {
