@@ -4,8 +4,8 @@
 
 ## 0.7.0
 
-- startTestPostgres accepts onServerLog(line, stream) to receive every server log line for the cluster's lifetime
-  Describe the user-facing change in one short paragraph before releasing.
+- `startTestPostgres` accepts `onServerLog(line, stream)`, which receives every non-empty server log line, tagged
+  `stdout`/`stderr`, for the cluster's whole lifetime. A throwing listener is ignored; ready detection is unchanged.
 
 ## 0.6.2
 
