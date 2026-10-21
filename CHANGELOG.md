@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.8.0
+
+- Share PgBouncer configuration and pooled runtime routing across applications
+  Add an ORM-independent pooling subpath, default pooled environment entrypoint,
+  and private configuration renderer CLI. Keep direct connections explicit for
+  migrations, backups and session-dependent work. Bound server connections, preserve
+  upstream TLS and retain database startup settings without ignoring them. Use
+  session pooling as the compatibility default; transaction mode is an explicit
+  choice for verified compatible consumers.
+- Update shared release notes tooling
+  Refresh the shared release notes package pins and lockfiles. Full release verification and production rollout remain with the next release candidate.
+- Update the supported Vite development dependency to resolve its security audit finding
+  Refresh the transitive Vite dependency within its supported range; no runtime
+  dependency or application behavior changes.
+
 ## 0.7.0
 
 - `startTestPostgres` accepts `onServerLog(line, stream)`, which receives every non-empty server log line, tagged

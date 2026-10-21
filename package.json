@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/db-kit",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Fleet database toolkit: open SQLite or Postgres from a DATABASE_URL with fleet-standard settings and a redacted description.",
   "author": "Andrew Popov",
   "license": "MIT",
@@ -43,7 +43,11 @@
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./pooling": {
+      "types": "./dist/pooling.d.ts",
+      "default": "./dist/pooling.js"
+    }
   },
   "files": [
     "dist"
@@ -67,7 +71,8 @@
     "release:cut": "release-kit cut",
     "release:check": "release-kit check",
     "release:hygiene": "release-kit hygiene",
-    "prepare": "git config core.hooksPath .githooks || true"
+    "prepare": "git config core.hooksPath .githooks || true",
+    "verify:pool": "node scripts/verify-pooling.mjs"
   },
   "dependencies": {
     "@andrewpopov/db-backup": "github:andrewpopov/db-backup#v0.21.0",
