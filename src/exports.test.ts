@@ -54,10 +54,13 @@ describe('package surface', () => {
         'introspectPostgres',
         'introspectSqlite',
         'openDatabase',
+        'openDatabaseFromEnvironment',
         'openPostgres',
         'openSqlite',
         'parseCodecManifest',
         'parseDatabaseUrl',
+        'renderPgBouncer',
+        'runtimeDatabaseUrl',
         'validateManifest',
       ].sort(),
     );
@@ -65,5 +68,12 @@ describe('package surface', () => {
 
   it('keeps drizzle-orm an optional peer so non-Drizzle apps need not install it', () => {
     expect(pkg.peerDependenciesMeta['drizzle-orm']?.optional).toBe(true);
+  });
+});
+
+describe('pooling entry', () => {
+  it('exports only the documented pooling API on its mapped subpath', async () => {
+    expect(Object.keys(await import('./pooling.js')).sort()).toEqual(['renderPgBouncer', 'runtimeDatabaseUrl']);
+    expect((pkg as unknown as { exports: Record<string, unknown> }).exports['./pooling']).toEqual({ types: './dist/pooling.d.ts', default: './dist/pooling.js' });
   });
 });
