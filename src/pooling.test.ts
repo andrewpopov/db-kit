@@ -37,9 +37,12 @@ describe('PgBouncer renderer', () => {
     expect(result.config).toContain('max_prepared_statements = 100');
     expect(result.config).toContain('track_extra_parameters = statement_timeout,bytea_output,extra_float_digits');
     expect(result.config).toContain('pool_mode=session');
+    expect(result.config).toContain('pool_mode = session');
     expect(result.config).not.toContain('secret');
     expect(result.auth).toContain('"app" "secret"');
     expect(result.runtimeUrls.app).toBe(pooled);
+    const explicit = renderPgBouncer({ databases: [{ ...database, mode: 'transaction' }], serverConnectionBudget: 7 });
+    expect(explicit.config).toContain('pool_mode=transaction');
   });
   it('refuses over-budget configurations, aliases, conflicting roles and TLS downgrades', () => {
     expect(() => renderPgBouncer({ databases: [database], serverConnectionBudget: 6 })).toThrow('budget');

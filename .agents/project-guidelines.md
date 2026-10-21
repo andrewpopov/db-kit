@@ -6,7 +6,7 @@ log-safe description of the connection. Status: in progress (PKG-175; v0.1 scope
 item 1, config + connect). The codec manifest landed in PKG-176; clone and cluster ops arrive in later tickets.
 Fleet-wide package rules live in `packages-meta`; this package's source and packed
 exports are authoritative. Prisma apps keep `@andrewpopov/prisma-tools` for provider
-selection; this kit is for Drizzle/raw-driver apps.
+selection; this kit handles Drizzle/raw-driver connections and ORM-independent pooling configuration.
 
 ## Layout
 

@@ -125,7 +125,7 @@ export function renderPgBouncer(options: PgBouncerOptions): PgBouncerFiles {
     runtime.port = String(port);
     runtime.searchParams.set('sslmode', 'disable');
     runtimeUrls[database.name] = runtime.toString();
-    return `${database.name} = host=${conninfo(upstream.host)} port=${upstream.port} dbname=${conninfo(upstream.database)} pool_size=${size} reserve_pool_size=${reserve} max_db_connections=${maximum} pool_mode=${database.mode ?? 'transaction'}`;
+    return `${database.name} = host=${conninfo(upstream.host)} port=${upstream.port} dbname=${conninfo(upstream.database)} pool_size=${size} reserve_pool_size=${reserve} max_db_connections=${maximum} pool_mode=${database.mode ?? 'session'}`;
   });
   if (cap > budget) return invalid('Per-database connection caps exceed the assigned server budget');
   if (tlsModes.size !== 1) return invalid('Different upstream TLS modes require separate PgBouncer instances');
@@ -135,8 +135,9 @@ export function renderPgBouncer(options: PgBouncerOptions): PgBouncerFiles {
     '[databases]', ...databases, '', '[pgbouncer]',
     'listen_addr = 127.0.0.1', `listen_port = ${port}`, `unix_socket_dir = ${socketDirectory}`,
     'unix_socket_mode = 0700', 'auth_type = scram-sha-256', `auth_file = ${authFile}`,
-    'pool_mode = transaction', `max_client_conn = ${maxClients}`, 'max_prepared_statements = 100',
-    // db-kit's startup settings must be tracked, never silently ignored.
+    'pool_mode = session', `max_client_conn = ${maxClients}`, 'max_prepared_statements = 100',
+    // Accept db-kit's startup settings without ignoring them. Session pooling is
+    // required for non-reported settings: transaction mode cannot isolate them.
     'track_extra_parameters = statement_timeout,bytea_output,extra_float_digits',
     `server_tls_sslmode = ${tlsMode}`,
     ...(options.serverTlsCaFile ? [`server_tls_ca_file = ${configPath(options.serverTlsCaFile)}`] : []),

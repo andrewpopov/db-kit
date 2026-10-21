@@ -255,8 +255,9 @@ For Prisma or other runtimes, use the ORM-independent
 
 `purpose: 'migration' | 'backup' | 'session'` selects the original direct URL.
 Use dedicated connections for LISTEN, session advisory locks, SQL PREPARE and
-other session-affine operations. Transaction pooling is the runtime default;
-an operator may configure an individual database in session mode. `pooling:
+other long-lived session-affine operations. Session pooling is the compatibility
+default. An operator may explicitly choose transaction pooling for a database
+only after verifying its drivers and query patterns. `pooling:
 'preferred'` explicitly permits direct fallback, and `'off'` explicitly opts out.
 Do not replace `DATABASE_URL` globally: migration and backup tools still need it.
 
@@ -285,7 +286,7 @@ adapter to render private files. The rendered config references the installed
 `/run/db-kit-pool`); adapters must install the files and create the socket directory
 for their unprivileged PgBouncer account before starting the service.
 
-The renderer uses loopback, transaction pooling, five normal plus two reserve
+The renderer uses loopback, session pooling, five normal plus two reserve
 connections per database, a hard cap per database, and prepared-statement support.
 The sum of caps must fit the explicit server budget. Names match upstream database
 names, so aliases cannot multiply their allowance. Credential conflicts fail.
@@ -294,10 +295,22 @@ verified TLS requires `serverTlsCaFile`. Driver-specific URL options supported
 by the renderer are retained on the runtime URL; unsupported options fail rather
 than being silently dropped. Nonstandard driver schemes need a consumer adapter.
 
-`statement_timeout`, `bytea_output` and `extra_float_digits` are tracked startup
-parameters, matching db-kit's direct connection contract. They are never added
-to `ignore_startup_parameters`. Check prepared queries, transactions, timeout and
-codec settings through the deployed pool before activating runtime routing.
+`statement_timeout`, `bytea_output` and `extra_float_digits` are accepted startup
+parameters. They are never added to `ignore_startup_parameters`. PostgreSQL does
+not report all of these settings to PgBouncer; listing them in
+`track_extra_parameters` does not make transaction pooling isolate them. Use
+session pooling with db-kit's `openPostgres`/`openDatabaseFromEnvironment` startup
+contract. Session pools keep one server per connected client; size client pools
+and worker counts to fit the assigned server cap. Check prepared queries,
+transactions, timeout isolation and codec settings through the deployed pool
+before activating runtime routing. Do not switch all drivers to transaction
+pooling merely because basic queries succeed.
 
 The pure `renderPgBouncer(options)` API returns the same artifacts for typed
 deployment adapters. It performs no shell execution or service mutation.
+
+From a db-kit source checkout, run `npm run verify:pool` with a canonical
+`POOLED_DATABASE_URL` and two free server slots to check the installed pool
+read-only. This explicit integration probe is separate from the embedded-PostgreSQL
+unit suite. It verifies prepared queries, transactions, startup settings, timeout
+isolation and health without logging the URL or driver errors.
