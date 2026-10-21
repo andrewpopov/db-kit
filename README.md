@@ -228,3 +228,76 @@ The password is never in: `describe()` output, any `DbKitError` message, or an e
 ## Tests
 
 `npm test` starts a real throwaway Postgres (`embedded-postgres`, temp dir, random port, password auth, self-signed TLS) so both dialects are always exercised; nothing is skipped. First run downloads the platform binary through npm.
+
+## Shared PgBouncer defaults
+
+`db-kit` owns reusable pool configuration and connection routing. Deployment
+adapters own installing PgBouncer, service accounts, file ownership, reloads and
+per-cluster capacity assignments. No host inventory or credentials belong in this
+package. Install PgBouncer 1.26 or later and verify its startup-parameter behavior
+before routing traffic.
+
+New application runtimes should use the shared entrypoint:
+
+```ts
+import { openDatabaseFromEnvironment } from '@andrewpopov/db-kit';
+const database = openDatabaseFromEnvironment(process.env, {
+  postgres: { applicationName: 'example-api' },
+});
+```
+
+For PostgreSQL this requires `POOLED_DATABASE_URL`, preserving the database, user
+and password from `DATABASE_URL`. Missing pooling fails explicitly. SQLite stays
+direct. Existing `openDatabase(url)` remains an explicit URL API for compatibility;
+existing consumers do not switch until their adapter adopts the new entrypoint.
+For Prisma or other runtimes, use the ORM-independent
+`runtimeDatabaseUrl(env, options)` from `@andrewpopov/db-kit/pooling`.
+
+`purpose: 'migration' | 'backup' | 'session'` selects the original direct URL.
+Use dedicated connections for LISTEN, session advisory locks, SQL PREPARE and
+other session-affine operations. Transaction pooling is the runtime default;
+an operator may configure an individual database in session mode. `pooling:
+'preferred'` explicitly permits direct fallback, and `'off'` explicitly opts out.
+Do not replace `DATABASE_URL` globally: migration and backup tools still need it.
+
+The generic CLI reads URLs only from environment variables named in a manifest:
+
+```json
+{
+  "serverConnectionBudget": 14,
+  "databases": [
+    { "name": "example", "urlEnv": "EXAMPLE_DATABASE_URL" }
+  ]
+}
+```
+
+```sh
+db-kit pool plan --config pool.json
+db-kit pool render --config pool.json --output-dir /private/new-pool-config
+```
+
+Plan prints counts and budget only. Render creates a new POSIX directory with
+mode 0700 and writes `pgbouncer.ini`, `users.txt` and `runtime.json` with mode
+0600; it refuses an existing directory. These files contain credentials: keep
+them out of git and logs. Windows hosts should use WSL or a POSIX deployment
+adapter to render private files. The rendered config references the installed
+`authFile` (default `/etc/db-kit-pool/users.txt`) and `socketDirectory` (default
+`/run/db-kit-pool`); adapters must install the files and create the socket directory
+for their unprivileged PgBouncer account before starting the service.
+
+The renderer uses loopback, transaction pooling, five normal plus two reserve
+connections per database, a hard cap per database, and prepared-statement support.
+The sum of caps must fit the explicit server budget. Names match upstream database
+names, so aliases cannot multiply their allowance. Credential conflicts fail.
+Upstream TLS is retained; different TLS modes require separate instances, and
+verified TLS requires `serverTlsCaFile`. Driver-specific URL options supported
+by the renderer are retained on the runtime URL; unsupported options fail rather
+than being silently dropped. Nonstandard driver schemes need a consumer adapter.
+
+`statement_timeout`, `bytea_output` and `extra_float_digits` are tracked startup
+parameters, matching db-kit's direct connection contract. They are never added
+to `ignore_startup_parameters`. Check prepared queries, transactions, timeout and
+codec settings through the deployed pool before activating runtime routing.
+
+The pure `renderPgBouncer(options)` API returns the same artifacts for typed
+deployment adapters. It performs no shell execution or service mutation.

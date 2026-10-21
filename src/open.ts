@@ -1,3 +1,4 @@
+import { runtimeDatabaseUrl, type PoolRoutingOptions } from './pooling.js';
 import { DbKitError } from './errors.js';
 import { openPostgres, type PostgresHandle, type PostgresOptions } from './postgres.js';
 import { openSqlite, type SqliteHandle, type SqliteOptions } from './sqlite.js';
@@ -21,4 +22,9 @@ export function openDatabase(url: string, opts: OpenDatabaseOptions = {}): Datab
       if (!opts.postgres) throw new DbKitError('INVALID_OPTIONS', 'postgres options (with applicationName) are required for a Postgres URL');
       return openPostgres(config, opts.postgres);
   }
+}
+
+/** Fleet runtime entrypoint: PostgreSQL uses POOLED_DATABASE_URL by default; direct work is explicit. */
+export function openDatabaseFromEnvironment(env: Readonly<Record<string, string | undefined>>, opts: OpenDatabaseOptions & PoolRoutingOptions = {}): DatabaseHandle {
+  return openDatabase(runtimeDatabaseUrl(env, opts), opts);
 }

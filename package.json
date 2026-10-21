@@ -43,7 +43,11 @@
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./pooling": {
+      "types": "./dist/pooling.d.ts",
+      "default": "./dist/pooling.js"
+    }
   },
   "files": [
     "dist"
