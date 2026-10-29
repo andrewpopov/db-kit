@@ -28,7 +28,7 @@ const REQUIRED_FILES = ['dist/pooling.js', 'dist/pooling.d.ts', 'dist/index.js',
 const workDir = mkdtempSync(join(tmpdir(), 'db-kit-verify-'));
 try {
   console.log('[verify:pack] Building...');
-  run('npm', ['run', 'build'], { cwd: pkgRoot, stdio: 'inherit' });
+  run('npm', ['run', 'compile'], { cwd: pkgRoot, stdio: 'inherit' });
 
   console.log('[verify:pack] Packing tarball...');
   const [{ filename }] = JSON.parse(run('npm', ['pack', '--json', '--pack-destination', workDir], { cwd: pkgRoot }));

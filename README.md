@@ -227,6 +227,8 @@ The password is never in: `describe()` output, any `DbKitError` message, or an e
 
 ## Tests
 
+Run `npm run hooks` once after cloning to enable the pre-push gate.
+
 `npm test` starts a real throwaway Postgres (`embedded-postgres`, temp dir, random port, password auth, self-signed TLS) so both dialects are always exercised; nothing is skipped. First run downloads the platform binary through npm.
 
 ## Shared PgBouncer defaults
