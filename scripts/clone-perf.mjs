@@ -6,7 +6,7 @@
  *
  *   DB_KIT_TARGET_URL=postgres://user:pass@host:5432/scratchdb node scripts/clone-perf.mjs --gb 1 [--reset] [--dry-run] [--dir /path]
  *
- * It needs only node and this package (built: `npm run build`). It creates its own tables (perf_symbols, perf_quotes,
+ * It needs only node and this package (built: `npm run compile`). It creates its own tables (perf_symbols, perf_quotes,
  * perf_news, perf_alerts) in schema public of the target and, with --reset, drops them first. Point it at a throwaway
  * database, never at one that matters. The target is treated as production by db-kit; this script passes the matching
  * --confirm-production itself.
