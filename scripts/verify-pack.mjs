@@ -9,7 +9,7 @@
  * Exits non-zero with a clear message on any failure.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,7 @@ try {
     join(consumerDir, 'package.json'),
     JSON.stringify({ name: 'db-kit-consumer', version: '1.0.0', private: true, type: 'module' }, null, 2),
   );
+  copyFileSync(join(pkgRoot, '.npmrc'), join(consumerDir, '.npmrc')); // a consumer resolves @andrewpopov dependencies from the fleet registry
   console.log('[verify:pack] Installing tarball (+ drizzle-orm peer) into consumer...');
   run('npm', ['install', '--no-audit', '--no-fund', tarballPath, `drizzle-orm@${pkg.devDependencies['drizzle-orm']}`], {
     cwd: consumerDir,

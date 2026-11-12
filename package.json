@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/db-kit",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Fleet database toolkit: open SQLite or Postgres from a DATABASE_URL with fleet-standard settings and a redacted description.",
   "author": "Andrew Popov",
   "license": "MIT",
@@ -75,7 +75,7 @@
     "verify:pool": "node scripts/verify-pooling.mjs"
   },
   "dependencies": {
-    "@andrewpopov/db-backup": "github:andrewpopov/db-backup#v0.22.1",
+    "@andrewpopov/db-backup": "0.27.1",
     "@types/better-sqlite3": "^9.6.0",
     "@types/pg": "^8.15.0",
     "better-sqlite3": "^13.0.0",
@@ -100,8 +100,8 @@
     }
   },
   "devDependencies": {
-    "@andrewpopov/deploy-kit": "github:andrewpopov/deploy-kit#v0.37.1",
-    "@andrewpopov/release-kit": "github:andrewpopov/release-kit#v0.7.1",
+    "@andrewpopov/deploy-kit": "0.37.1",
+    "@andrewpopov/release-kit": "0.7.1",
     "@types/node": "^22.0.0",
     "@types/pg-copy-streams": "^1.2.5",
     "drizzle-orm": "^0.45.0",
