@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -200,6 +200,8 @@ export async function startTestPostgresWith(options, pickPort) {
             const cert = join(dir, 'server.crt');
             const key = join(dir, 'server.key');
             execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=db-kit-test', '-addext', `subjectAltName=${options.tls.san ?? 'DNS:localhost'}`, '-keyout', key, '-out', cert], { stdio: 'ignore' });
+            // Postgres refuses a key file group/world can read; LibreSSL (macOS /usr/bin/openssl) writes 0644, OpenSSL 3 writes 0600.
+            chmodSync(key, 0o600);
             tlsFlags.push('-c', 'ssl=on', '-c', `ssl_cert_file=${cert}`, '-c', `ssl_key_file=${key}`);
             caPem = readFileSync(cert, 'utf8');
         }
