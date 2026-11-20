@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/db-kit",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Fleet database toolkit: open SQLite or Postgres from a DATABASE_URL with fleet-standard settings and a redacted description.",
   "author": "Andrew Popov",
   "license": "MIT",
@@ -114,6 +114,7 @@
     "db-kit": "dist/bin.js"
   },
   "overrides": {
-    "deepmerge-ts": "8.0.2"
+    "deepmerge-ts": "8.0.2",
+    "effect": "3.22.5"
   }
 }
